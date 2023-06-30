@@ -103,7 +103,7 @@ enum Expr_Kind {
     EXPR_FIRST, EXPR_LAST,
     EXPR_BITOR, EXPR_BITAND, EXPR_BITXOR,
     EXPR_BITSHL, EXPR_BITSHR, EXPR_COMPLEMENT,
-    SizeOf_Expr_Kind		/* The last element is also the number of elements... */
+    SizeOf_Expr_Kind        /* The last element is also the number of elements... */
 };
 
 union Expr_Data {
@@ -224,4 +224,4 @@ extern void dealloc_node(void *);
 extern void dealloc_string(char *);
 extern void free_stmt(Stmt *);
 
-#endif				/* !AST_h */
+#endif              /* !AST_h */

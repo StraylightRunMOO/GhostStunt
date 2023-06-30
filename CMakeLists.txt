@@ -8,9 +8,9 @@ project(ToastStunt VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_RELEASE} 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMakeModules/")
 
 # Don't bother if we don't have these
-find_package(BISON REQUIRED)
+#find_package(BISON REQUIRED)
+#find_package(gperf REQUIRED)
 find_package(Perl REQUIRED)
-find_package(gperf REQUIRED)
 
 # (is there a better way to detect Apple Silicon?)
 EXECUTE_PROCESS( COMMAND uname -m COMMAND tr -d '\n' OUTPUT_VARIABLE ARCHITECTURE )
@@ -52,7 +52,7 @@ if( CMAKE_SIZEOF_VOID_P EQUAL 4 )
 endif()
 
 # Compiler Flags
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 99)
 
 # These flags are shared by the RELEASE and WARN build types.
@@ -118,14 +118,14 @@ else()
 endif()
 
 # Yacc (-d is a default flag on my bison)
-bison_target(MOOParser src/parser.y ${CMAKE_BINARY_DIR}/parser.cc COMPILE_FLAGS "-y")
+#bison_target(MOOParser src/parser.y ${CMAKE_BINARY_DIR}/parser.cc COMPILE_FLAGS "-y")
 
 # Keywords.cc
-set(KEYWORDS ${CMAKE_BINARY_DIR}/keywords.cc)
-add_custom_command(
-    OUTPUT ${KEYWORDS}
-    COMMAND ${gperf_EXECUTABLE} --language=C++ --ignore-case --readonly-tables --struct-type --omit-struct-type --key-positions=1,3,$$ ${CMAKE_SOURCE_DIR}/src/keywords.gperf  > ${CMAKE_BINARY_DIR}/keywords.cc
-    COMMENT "Generating keywords.cc")
+#set(KEYWORDS ${CMAKE_BINARY_DIR}/keywords.cc)
+#add_custom_command(
+#    OUTPUT ${KEYWORDS}
+#    COMMAND ${gperf_EXECUTABLE} --language=C++ --ignore-case --readonly-tables --struct-type --omit-struct-type --key-positions=1,3,$$ ${CMAKE_SOURCE_DIR}/src/keywords.gperf  > ${CMAKE_BINARY_DIR}/keywords.cc
+#    COMMENT "Generating keywords.cc")
 
 # version_options.h
 execute_process(COMMAND ${PERL_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/include/version_opt_gen.pl)
@@ -208,7 +208,7 @@ set(src_CXXSRCS
     src/functions.cc
     src/garbage.cc
     src/json.cc
-    ${KEYWORDS}
+    src/keywords.cc
     src/log.cc
     src/list.cc
     src/map.cc
@@ -244,7 +244,7 @@ set(src_CXXSRCS
     src/curl.cc)
 
 set(src_GRAMMAR
-    ${BISON_MOOParser_OUTPUTS})
+    src/parser.cc)
 
 set(src_SERVER
     ${VERSION_SRC}

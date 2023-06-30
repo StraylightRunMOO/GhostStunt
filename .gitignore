@@ -9,6 +9,7 @@ version_options.h
 version_src*.h
 keywords.c
 *.o
+.DS_Store
 moo
 \#*\#
 .\#*

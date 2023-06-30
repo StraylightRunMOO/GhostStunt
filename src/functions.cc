@@ -24,6 +24,7 @@
 #include "list.h"
 #include "log.h"
 #include "map.h"
+#include "match.h"
 #include "server.h"
 #include "storage.h"
 #include "streams.h"
@@ -74,7 +75,8 @@ static registry bi_function_registries[] =
     register_simplexnoise,
     register_argon2,
     register_spellcheck,
-    register_curl
+    register_curl,
+    //register_match
 };
 
 void
@@ -104,6 +106,10 @@ struct bft_entry {
 
 static struct bft_entry bf_table[MAX_FUNC];
 static unsigned top_bf_table = 0;
+
+unsigned registered_function_count() {
+  return top_bf_table - 1;
+}
 
 static unsigned
 register_common(const char *name, int minargs, int maxargs, bf_type func,
@@ -196,6 +202,12 @@ number_func_by_name(const char *name)
 }
 
 /*** calling built-in functions ***/
+
+//void
+//call_library_func(unsigned n, Var *arglist, Objid progr)
+//{
+///    db_set_position(arglist.v.list[1].v.obj, arglist.v.list[2]);
+//}
 
 package
 call_bi_func(unsigned n, Var arglist, Byte func_pc,

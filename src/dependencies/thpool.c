@@ -8,7 +8,14 @@
  *
  ********************************/
 
-#define _POSIX_C_SOURCE 200809L
+#	if defined(__APPLE__)
+#		include <AvailabilityMacros.h>
+#	else
+#		ifndef _POSIX_C_SOURCE
+#			define _POSIX_C_SOURCE 200809L
+#		endif
+#	endif
+
 #include <unistd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -323,7 +330,7 @@ static void* thread_do(struct thread* thread_p){
 #if defined(__linux__)
 	/* Use prctl instead to prevent using _GNU_SOURCE flag and implicit declaration */
 	prctl(PR_SET_NAME, thread_name);
-#elif defined(__APPLE__) && defined(__MACH__)
+//#elif defined(__APPLE__) && defined(__MACH__)
 	pthread_setname_np(thread_name);
 #else
 	err("thread_do(): pthread_setname_np is not supported on this system");
