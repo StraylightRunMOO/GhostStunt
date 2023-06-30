@@ -2,9 +2,9 @@
 
 A fork of [ToastStunt](https://github.com/lisdude/toaststunt) collecting various enhancements and possibly ill-advised schemes.
 
-## This is experimental software. Caveat emptor!
+### This is experimental software. Caveat emptor!
 
-# Build Instructions
+## Build Instructions
 ### **Docker**
 ```bash
 
