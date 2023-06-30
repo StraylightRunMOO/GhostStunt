@@ -15,6 +15,7 @@
     Pavel@Xerox.Com
  *****************************************************************************/
 
+#include <atomic>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/resource.h>  // getrusage

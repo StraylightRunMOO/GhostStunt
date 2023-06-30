@@ -11,6 +11,7 @@ keywords.c
 *.o
 .DS_Store
 moo
+data
 \#*\#
 .\#*
 backups
