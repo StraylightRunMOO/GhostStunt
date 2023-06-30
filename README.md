@@ -31,4 +31,4 @@ docker run --rm -dt -v=$(pwd)/data/:/data/ -p 8888:7777/tcp localhost/ghoststunt
 
 ```
 
-Additional build instructions and information can be found in the original [ToastStunt documentation](https://github.com/StraylightRunMOO/GhostStunt/docs/ToastStunt.md).
+Additional build instructions and information can be found in the original [ToastStunt documentation]([https://github.com/StraylightRunMOO/GhostStunt/docs/ToastStunt.m](https://github.com/StraylightRunMOO/GhostStunt/blob/main/docs/ToastStunt.md)https://github.com/StraylightRunMOO/GhostStunt/blob/main/docs/ToastStunt.md).
