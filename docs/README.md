@@ -1,6 +1,6 @@
 # 👻 GhostStunt
 
-A fork of [ToastStunt](https://github.com/lisdude/toaststunt) collecting various enhancements and possibly ill-advised schemes.
+A fork of [ToastStunt](https://github.com/lisdude/toaststunt) featuring various enhancements and ill-advised schemes.
 
 ### This is experimental software. Caveat emptor!
 
@@ -22,7 +22,6 @@ docker run --rm -dt -p 7777:7777/tcp localhost/ghoststunt:latest
 # Run with additional options passed to the 'moo' command 
 docker run --rm -dt --name ghoststunt-server -p 7777:7777/tcp \
   localhost/ghoststunt:latest
-  -o \
   -i /data/files \
   -x /data/exec \
   /data/db/ghostcore.db /data/db/ghostcore.out.db 7777
