@@ -2,16 +2,18 @@
 
 A fork of [ToastStunt](https://github.com/lisdude/toaststunt) collecting various enhancements and possibly ill-advised schemes.
 
-### This is experimental software. Caveat emptor!
+## This is experimental software. Caveat emptor!
 
-## Build Instructions
-### **Docker / Podman**
+# Build Instructions
+### **Docker**
 ```bash
 
 # Build from git repository
 docker build -t ghoststunt https://github.com/StraylightRunMOO/GhostStunt.git
 
-# Build locally
+# Or build locally
+git clone https://github.com/StraylightRunMOO/GhostStunt.git
+cd GhostStunt
 docker build -t ghoststunt .
 
 # Run with default options
@@ -31,7 +33,7 @@ docker run --rm -dt -v=$(pwd)/data/:/data/ -p 8888:7777/tcp localhost/ghoststunt
 
 ```
 
-**Original ToastStunt docs continue below**
+### **[Original ToastStunt docs continue below]**
 
 ToastStunt is a network accessible, multi-user, programmable, interactive system used in the creation of both text-based and web-based experiences. The most common usage is the creation of MUDs (examples include [Miriani](https://www.toastsoft.net) and [ChatMud](https://www.chatmud.com/)). ToastStunt is a fork of [Stunt](https://github.com/toddsundsted/stunt), which is a fork of [LambdaMOO](https://github.com/wrog/lambdamoo). It builds upon those projects to add improved performance, modern conveniences, and an improved user experience.
 
