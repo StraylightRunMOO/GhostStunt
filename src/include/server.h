@@ -28,7 +28,6 @@
 #define Server_H 1
 
 #include <stdio.h>
-
 #include "config.h"
 
 typedef struct {		/* Server's handle on a connection */
@@ -50,7 +49,7 @@ static void alloc_init() {
 	rpmalloc_config_t config = {0};
 	config.enable_huge_pages = 1;
 	config.span_map_count    = 64;
-	config.page_size         = 4 * 1024 * 1024;
+	config.page_size         = 4*1024*1024;
 	rpmalloc_initialize_config(&config);
 }
 

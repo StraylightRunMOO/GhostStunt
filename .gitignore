@@ -11,6 +11,7 @@ keywords.c
 *.o
 .DS_Store
 moo
+data
 \#*\#
 .\#*
 backups
@@ -20,7 +21,6 @@ ctags
 configure
 xcode
 Makefile.in.bak
-keywords.cc
 build
 .vscode
 test/executables/true

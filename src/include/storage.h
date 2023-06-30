@@ -18,20 +18,23 @@
 #ifndef STORAGE_H
 #define STORAGE_H 1
 
-#include <atomic>
 #include <stdlib.h>
 #include <string.h>
 #include <new>  // bad_alloc, bad_array_new_length
 #include "options.h"
 
 #define REFCOUNT_OFFSET -1
+#define REFCOUNT(p)    (*((refcount_t*)p+REFCOUNT_OFFSET))
+#define GC_OVERHEAD(p) ((gc_overhead *)ptr)[GC_OFFSET]
 
-#define ATOMIC_REFCOUNT
-#if defined(ATOMIC_REFCOUNT)
-    #include <atomic>
-    using refcount_t = std::atomic_uint;
+#if defined(UNSAFE_REFCOUNT)
+    #include <stdint.h>
+    using refcount_t = uint32_t;
+    #define GET_REFCOUNT(p) REFCOUNT(p)
 #else
-    using refcount_t = size_t;
+    #include <atomic>
+    using refcount_t = std::atomic<uint_fast32_t>;
+    #define GET_REFCOUNT(p) REFCOUNT(p).load()
 #endif
 
 #if defined(MEMO_STRLEN) || defined(MEMO_VALUE_BYTES)
@@ -42,9 +45,6 @@
 #ifdef ENABLE_GC
 #define GC_OFFSET MEMO_OFFSET - 1
 #endif
-
-#define REFCOUNT(p)    (*((refcount_t*)p + REFCOUNT_OFFSET))
-#define GC_OVERHEAD(p) ((gc_overhead *)ptr)[GC_OFFSET]
 
 #ifdef ENABLE_GC
 /* See "Concurrent Cycle Collection in Reference Counted Systems",
@@ -128,11 +128,7 @@ delref(const void *ptr) {
 
 static inline int
 refcount(const void *ptr) {
-    #if defined(ATOMIC_REFCOUNT)
-        return REFCOUNT(ptr).load();
-    #else
-        return static_cast<int>(REFCOUNT(ptr));
-    #endif
+    return static_cast<int>(GET_REFCOUNT(ptr));
 }
 
 extern char *str_dup(const char *);

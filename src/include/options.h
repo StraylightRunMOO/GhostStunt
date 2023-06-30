@@ -192,7 +192,7 @@
  * DEFAULT_TLS_KEY can be overridden with the command-line option --tls-key (-k)
  */
 
-#define USE_TLS
+//#define USE_TLS
 #define VERIFY_TLS_PEERS
 #define DEFAULT_TLS_CERT    "/etc/letsencrypt/live/fullchain.pem"
 #define DEFAULT_TLS_KEY     "/etc/letsencrypt/live/privkey.pem"
@@ -546,9 +546,26 @@
 #define CURL_TIMEOUT 60
 
 
+/******************************************************************************
+ * Uncomment the line below to use a non-atomic type for reference counts.
+ * This should work fine and provide a performance bump in a single-threaded
+ * configuration, but may cause problems when thread pool is enabled
+*/
+#define UNSAFE_REFCOUNT
 
+
+/******************************************************************************
+ * Enable/disable the custom allocator and set some basic options below.
+ * More advanced options including stats / fine-grained performance tuning
+ * can be found in /src/dependencies/rpmalloc.c
+*/
 #define CUSTOM_ALLOC
 
+#if defined(CUSTOM_ALLOC)
+  #define ALLOC_PAGE_SIZE   4*1024*1024
+  #define ALLOC_SPAN_COUNT  64
+  #define ALLOC_ENABLE_HUGE 1
+#endif 
 
 /*****************************************************************************
  ********** You shouldn't need to change anything below this point. **********
