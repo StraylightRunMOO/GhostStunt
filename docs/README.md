@@ -8,6 +8,10 @@ A fork of [ToastStunt](https://github.com/lisdude/toaststunt) collecting various
 ### **Docker / Podman**
 ```bash
 
+# Build from git repository
+podman build -t ghoststunt https://github.com/StraylightRunMOO/GhostStunt.git
+
+# Build locally
 docker build -t ghoststunt .
 
 # Minimal
