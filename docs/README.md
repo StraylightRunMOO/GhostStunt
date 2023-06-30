@@ -9,19 +9,21 @@ A fork of [ToastStunt](https://github.com/lisdude/toaststunt) collecting various
 ```bash
 
 # Build from git repository
-podman build -t ghoststunt https://github.com/StraylightRunMOO/GhostStunt.git
+docker build -t ghoststunt https://github.com/StraylightRunMOO/GhostStunt.git
 
 # Build locally
 docker build -t ghoststunt .
 
 # Minimal
-docker run --rm -dt --name ghoststunt-server -p 7777:7777/tcp localhost/ghoststunt:latest
+docker run --rm -dt -p 7777:7777/tcp localhost/ghoststunt:latest
 
 # Full options
-docker run --rm -dt --name ghoststunt-server -p 7777:7777/tcp localhost/ghoststunt:latest -o \
--i /data/files \
--x /data/exec \
-/data/db/ghostcore.db /data/db/ghostcore.out.db 7777
+docker run --rm -dt --name ghoststunt-server -p 7777:7777/tcp \
+  localhost/ghoststunt:latest
+  -o \
+  -i /data/files \
+  -x /data/exec \
+  /data/db/ghostcore.db /data/db/ghostcore.out.db 7777
 
 ```
 
