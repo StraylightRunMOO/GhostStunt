@@ -515,8 +515,8 @@
  ******************************************************************************
  */
 
-#define TOTAL_BACKGROUND_THREADS    2
-#define DEFAULT_THREAD_MODE         true
+#define TOTAL_BACKGROUND_THREADS    0
+#define DEFAULT_THREAD_MODE         false
 
 /******************************************************************************
  * By default, the server will resolve DNS hostnames from IP addresses for all
@@ -544,6 +544,11 @@
 */
 
 #define CURL_TIMEOUT 60
+
+
+
+#define CUSTOM_ALLOC
+
 
 /*****************************************************************************
  ********** You shouldn't need to change anything below this point. **********

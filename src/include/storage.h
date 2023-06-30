@@ -15,24 +15,36 @@
     Pavel@Xerox.Com
  *****************************************************************************/
 
-#ifndef Storage_h
-#define Storage_h 1
+#ifndef STORAGE_H
+#define STORAGE_H 1
 
-#include <string.h>
 #include <atomic>
-
+#include <stdlib.h>
+#include <string.h>
+#include <new>  // bad_alloc, bad_array_new_length
 #include "options.h"
 
-#define REFCOUNT_OFFSET     -1
+#define REFCOUNT_OFFSET -1
+
+#define ATOMIC_REFCOUNT
+#if defined(ATOMIC_REFCOUNT)
+    #include <atomic>
+    using refcount_t = std::atomic_uint;
+#else
+    using refcount_t = size_t;
+#endif
 
 #if defined(MEMO_STRLEN) || defined(MEMO_VALUE_BYTES)
-#   define MEMO_OFFSET         REFCOUNT_OFFSET - 1
+#define MEMO_OFFSET REFCOUNT_OFFSET - 1
 #else
-#   define MEMO_OFFSET         REFCOUNT_OFFSET
+#define MEMO_OFFSET REFCOUNT_OFFSET
 #endif
 #ifdef ENABLE_GC
-#   define GC_OFFSET           MEMO_OFFSET - 1
+#define GC_OFFSET MEMO_OFFSET - 1
 #endif
+
+#define REFCOUNT(p)    (*((refcount_t*)p + REFCOUNT_OFFSET))
+#define GC_OVERHEAD(p) ((gc_overhead *)ptr)[GC_OFFSET]
 
 #ifdef ENABLE_GC
 /* See "Concurrent Cycle Collection in Reference Counted Systems",
@@ -50,59 +62,35 @@ typedef enum GC_Color {
 } GC_Color;
 
 typedef struct gc_overhead {
-    unsigned int buffered:1;
-    GC_Color color:3;
+    unsigned int buffered : 1;
+    GC_Color color : 3;
 } gc_overhead;
- #endif
 
-static inline int
-addref(const void *ptr)
-{
-    return ++((std::atomic_uint *)ptr)[REFCOUNT_OFFSET];
-}
-
-static inline int
-delref(const void *ptr)
-{
-    return --((std::atomic_uint *)ptr)[REFCOUNT_OFFSET];
-}
-
-static inline int
-refcount(const void *ptr)
-{
-    return ((std::atomic_uint *)ptr)[REFCOUNT_OFFSET].load();
-}
-
-#ifdef ENABLE_GC
 static inline void
-gc_set_buffered(const void *ptr)
-{
-    ((gc_overhead *)ptr)[GC_OFFSET].buffered = 1;
+gc_set_buffered(const void *ptr) {
+    GC_OVERHEAD(ptr).buffered = 1;
 }
 
 static inline void
-gc_clear_buffered(const void *ptr)
-{
-    ((gc_overhead *)ptr)[GC_OFFSET].buffered = 0;
+gc_clear_buffered(const void *ptr) {
+    GC_OVERHEAD(ptr).buffered = 0;
 }
 
 static inline int
-gc_is_buffered(const void *ptr)
-{
-    return ((gc_overhead *)ptr)[GC_OFFSET].buffered;
+gc_is_buffered(const void *ptr) {
+    return GC_OVERHEAD(ptr).buffered;
 }
 
 static inline void
-gc_set_color(const void *ptr, GC_Color color)
-{
-    ((gc_overhead *)ptr)[GC_OFFSET].color = color;
+gc_set_color(const void *ptr, GC_Color color) {
+    GC_OVERHEAD(ptr).color = color;
 }
 
 static inline GC_Color
-gc_get_color(const void *ptr)
-{
-    return ((gc_overhead *)ptr)[GC_OFFSET].color;
+gc_get_color(const void *ptr) {
+    return GC_OVERHEAD(ptr).color;
 }
+
 #endif
 
 typedef enum Memory_Type {
@@ -118,7 +106,7 @@ typedef enum Memory_Type {
     M_REF_ENTRY, M_REF_TABLE, M_VC_ENTRY, M_VC_TABLE, M_STRING_PTRS,
     M_INTERN_POINTER, M_INTERN_ENTRY, M_INTERN_HUNK,
 
-    M_TREE, M_NODE, M_TRAV,
+    M_MAP, M_TREE, M_NODE, M_TRAV,
 
     M_ANON, /* anonymous object */
 
@@ -128,18 +116,37 @@ typedef enum Memory_Type {
     M_STRUCT, M_ARRAY
 } Memory_Type;
 
+static inline int
+addref(const void *ptr) {
+    return ++REFCOUNT(ptr);
+}
+
+static inline int
+delref(const void *ptr) {
+    return --REFCOUNT(ptr);
+}
+
+static inline int
+refcount(const void *ptr) {
+    #if defined(ATOMIC_REFCOUNT)
+        return REFCOUNT(ptr).load();
+    #else
+        return static_cast<int>(REFCOUNT(ptr));
+    #endif
+}
+
 extern char *str_dup(const char *);
 extern const char *str_ref(const char *);
-
+extern void myfree(void *where, Memory_Type type);
+extern size_t mymemsize(void *ptr);
 extern void myfree(void *where, Memory_Type type);
 extern void *mymalloc(unsigned size, Memory_Type type);
 extern void *myrealloc(void *where, unsigned size, Memory_Type type);
 
-static inline void		/* XXX was extern, fix for non-gcc compilers */
-free_str(const char *s)
-{
+static inline void /* XXX was extern, fix for non-gcc compilers */
+free_str(const char *s) {
     if (delref(s) == 0)
-	myfree((void *) s, M_STRING);
+        myfree((void *)s, M_STRING);
 }
 
 #ifdef MEMO_STRLEN
@@ -147,10 +154,10 @@ free_str(const char *s)
  * Using the same mechanism as ref_count.h uses to hide Value ref counts,
  * keep a memozied strlen in the storage with the string.
  */
-#define memo_strlen(X)		((void)0, (((int *)(X))[MEMO_OFFSET]))
+#define memo_strlen(X) ((void)0, (((int *)(X))[MEMO_OFFSET]))
 #else
-#define memo_strlen(X)		strlen(X)
+#define memo_strlen(X) strlen(X)
 
 #endif /* MEMO_STRLEN */
 
-#endif				/* Storage_h */
+#endif /* STORAGE_H */

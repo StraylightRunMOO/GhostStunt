@@ -49,7 +49,7 @@ new_intern_entry_hunk(int size)
 
 /* Chosen large enough to trigger the mmap() semantics of linux
    malloc. */
-#define INTERN_ENTRY_HUNK_SIZE 100000
+#define INTERN_ENTRY_HUNK_SIZE 65535
 
 static struct intern_entry *
 allocate_intern_entry(void)
@@ -97,7 +97,7 @@ static int intern_table_count = 0;
 static int intern_bytes_saved = 0;
 static int intern_allocations_saved = 0;
 
-#define INTERN_TABLE_SIZE_INITIAL 10007
+#define INTERN_TABLE_SIZE_INITIAL 16384
 
 static struct intern_entry **
 make_intern_table(int size) {

@@ -164,6 +164,7 @@ set(src_CSRCS
     src/dependencies/thpool.c
     src/dependencies/sosemanuk.c
     src/dependencies/linenoise.c
+    src/dependencies/rpmalloc.c
     src/dependencies/strnatcmp.c
     src/http_parser.c
     src/regexpr.c)

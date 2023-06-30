@@ -23,6 +23,7 @@
  * complete set of procedures that a network implementation must provide.
  */
 
+
 #ifndef Server_H
 #define Server_H 1
 
@@ -39,6 +40,35 @@ typedef struct {		/* Server's handle on a listening point */
 } server_listener;
 
 #include "network.h"		/* Include this *after* defining the types */
+#ifdef CUSTOM_ALLOC
+
+extern "C" {
+	#include "../dependencies/rpmalloc.h"
+}
+
+static void alloc_init() {
+	rpmalloc_config_t config = {0};
+	config.enable_huge_pages = 1;
+	config.span_map_count    = 64;
+	config.page_size         = 4 * 1024 * 1024;
+	rpmalloc_initialize_config(&config);
+}
+
+static void alloc_finalize() {
+  rpmalloc_finalize();
+}
+
+#else 
+
+static void initialize_allocator() {
+	;
+}
+
+static void finalize_allocator() {
+	;
+}
+
+#endif
 
 extern server_listener null_server_listener;
 
