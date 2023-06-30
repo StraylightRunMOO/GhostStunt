@@ -1,4 +1,4 @@
-# GhostStunt
+# 👻 GhostStunt
 
 A fork of [ToastStunt](https://github.com/lisdude/toaststunt) collecting various enhancements and possibly ill-advised schemes.
 
@@ -14,16 +14,20 @@ docker build -t ghoststunt https://github.com/StraylightRunMOO/GhostStunt.git
 # Build locally
 docker build -t ghoststunt .
 
-# Minimal
+# Run with default options
 docker run --rm -dt -p 7777:7777/tcp localhost/ghoststunt:latest
 
-# Full options
+# Run with additional options passed to the 'moo' command 
 docker run --rm -dt --name ghoststunt-server -p 7777:7777/tcp \
   localhost/ghoststunt:latest
   -o \
   -i /data/files \
   -x /data/exec \
   /data/db/ghostcore.db /data/db/ghostcore.out.db 7777
+
+# Mount folder as a volume, map to port 8888 
+mkdir -p data/db
+docker run --rm -dt -v=$(pwd)/data/:/data/ -p 8888:7777/tcp localhost/ghoststunt:latest
 
 ```
 
