@@ -13,8 +13,7 @@ docker build -t ghoststunt https://github.com/StraylightRunMOO/GhostStunt.git
 
 # Or build locally
 git clone https://github.com/StraylightRunMOO/GhostStunt.git
-cd GhostStunt
-docker build -t ghoststunt .
+cd GhostStunt && docker build -t ghoststunt .
 
 # Run with default options
 docker run --rm -dt -p 7777:7777/tcp localhost/ghoststunt:latest
