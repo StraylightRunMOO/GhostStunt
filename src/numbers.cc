@@ -30,8 +30,13 @@
 
 #include "my-math.h"
 #include <stdlib.h>
-#include <string.h>
+#include <string>
+#include <ctime>
 #include <time.h>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+
 #include "config.h"
 #include "functions.h"
 #include "log.h"
@@ -624,6 +629,46 @@ bf_time(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(r);
 }
 
+/* tm time structs have a max year equal to integer, 
+   which a 64 bit number of seconds will surpass  */
+const long int year_seconds = 31536000;
+static const Num MAX_YEAR   = std::numeric_limits<int>::max() * year_seconds;
+static const Num MIN_YEAR   = -MAX_YEAR;
+
+static package bf_time_fmt(Var arglist, Byte next, void *vdata, Objid progr) {
+  auto nargs      = arglist.v.list[0].v.num;
+  const char *fmt = nargs >= 1 ? arglist.v.list[1].v.str : "%c %Z";
+  std::time_t ts  = nargs >= 2 ? std::clamp(arglist.v.list[2].v.num, MIN_YEAR, MAX_YEAR) : time(nullptr);
+  struct tm *t    = localtime(&ts);
+
+  free_var(arglist);
+
+  if (t == nullptr)
+    return make_error_pack(E_INVARG);
+
+  std::ostringstream ss;
+  ss << std::put_time(t, fmt);  
+
+  return make_var_pack(str_dup_to_var(ss.str().c_str()));
+}
+
+static package bf_time_parse(Var arglist, Byte next, void *vdata, Objid progr) {
+  auto nargs      = arglist.v.list[0].v.num;
+  const char *str = arglist.v.list[1].v.str;
+  const char *fmt = nargs >= 2 ? arglist.v.list[2].v.str : "%c %Z";
+  int is_dst      = nargs >= 3 ? arglist.v.list[3].v.num : -1; // default attempts to figure out DST
+
+  std::tm t{};
+  t.tm_isdst = is_dst;
+
+  std::istringstream ss(str);
+  ss >> std::get_time(&t, fmt);
+
+  free_var(arglist);
+
+  return make_var_pack(Var::new_int(mktime(&t)));
+}
+
 static package
 bf_ctime(Var arglist, Byte next, void *vdata, Objid progr)
 {
@@ -943,8 +988,9 @@ register_numbers(void)
     register_function("time", 0, 0, bf_time);
     register_function("ctime", 0, 1, bf_ctime, TYPE_INT);
     register_function("ftime", 0, 1, bf_ftime, TYPE_INT);
-    register_function("floatstr", 2, 3, bf_floatstr,
-                      TYPE_FLOAT, TYPE_INT, TYPE_ANY);
+    register_function("time_fmt",   0, 2, bf_time_fmt,   TYPE_STR, TYPE_INT);
+    register_function("time_parse", 1, 3, bf_time_parse, TYPE_STR, TYPE_STR, TYPE_INT);
+    register_function("floatstr", 2, 3, bf_floatstr, TYPE_FLOAT, TYPE_INT, TYPE_ANY);
 
     register_function("sqrt", 1, 1, bf_sqrt, TYPE_FLOAT);
     register_function("cbrt", 1, 1, bf_cbrt, TYPE_FLOAT);
