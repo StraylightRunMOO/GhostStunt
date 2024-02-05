@@ -29,9 +29,7 @@
 #include "utils.h"
 
 #ifdef CUSTOM_ALLOC
-    extern "C" {
-        #include "dependencies/rpmalloc.h"
-    }
+    #include "dependencies/rpmalloc.h"
 #endif
 
 static inline int
@@ -76,17 +74,20 @@ refcount_overhead(Memory_Type type) {
 }
 
 void *
-mymalloc(unsigned size, Memory_Type type) {
+mymalloc(unsigned size, Memory_Type type)
+{
     char *memptr;
     int offs = refcount_overhead(type);
 
-    if (size == 0) /* For queasy systems */
+    if (size == 0)      /* For queasy systems */
         size = 1;
+    else if(type == M_LIST && !(IS_POWER_OF_TWO(size)))
+        size = next_power_of_two((size / sizeof(Var))) * sizeof(Var);
 
     #ifdef CUSTOM_ALLOC
-        memptr = (char *)rpmalloc(offs + size);
+      memptr = (char *) rpmalloc(offs + size);
     #else
-        memptr = (char *)malloc(offs + size);
+      memptr = (char *) malloc(offs + size);
     #endif
 
     if (!memptr) {
@@ -96,26 +97,22 @@ mymalloc(unsigned size, Memory_Type type) {
     }
 
     if (offs) {
-        memptr+=offs;
-        REFCOUNT(memptr) = 1;
-
-    #ifdef ENABLE_GC
-        if (type == M_LIST || type == M_TREE || type == M_ANON) {
-            gc_clear_buffered(memptr);
-            gc_set_color(memptr, (type == M_ANON) ? GC_BLACK : GC_GREEN);
-        }
-    #endif /* ENABLE_GC */
-
-    #ifdef MEMO_STRLEN
-        if (type == M_STRING)
-            ((int *)memptr)[MEMO_OFFSET] = size - 1;
-    #endif /* MEMO_STRLEN */
-
-    #ifdef MEMO_VALUE_BYTES
-        if (type == M_LIST || type == M_TREE)
-            ((int *)memptr)[MEMO_OFFSET] = 0;
-    #endif /* MEMO_VALUE_BYTES */
-
+        memptr += offs;
+        ((refcount_t *)memptr)[REFCOUNT_OFFSET] = 1;
+        #ifdef ENABLE_GC
+            if (type == M_LIST || type == M_TREE || type == M_ANON) {
+                ((gc_overhead *)memptr)[GC_OFFSET].buffered = 0;
+                ((gc_overhead *)memptr)[GC_OFFSET].color = (type == M_ANON) ? GC_BLACK : GC_GREEN;
+            }
+        #endif /* ENABLE_GC */
+        #ifdef MEMO_STRLEN
+            if (type == M_STRING)
+                ((int *) memptr)[MEMO_OFFSET] = size - 1;
+        #endif /* MEMO_STRLEN */
+        #ifdef MEMO_VALUE_BYTES
+            if (type == M_LIST || type == M_TREE)
+                ((int *) memptr)[MEMO_OFFSET] = 0;
+        #endif /* MEMO_VALUE_BYTES */
     }
     return memptr;
 }
@@ -147,28 +144,34 @@ str_dup(const char *s) {
 }
 
 void *
-myrealloc(void *ptr, unsigned size, Memory_Type type) {
+myrealloc(void *ptr, unsigned size, Memory_Type type)
+{
+    if(type == M_LIST && !(IS_POWER_OF_TWO(size)))
+        size = next_power_of_two((size / sizeof(Var))) * sizeof(Var);
+
     int offs = refcount_overhead(type);
 
     #ifdef CUSTOM_ALLOC
-        ptr = rprealloc((char *)ptr - offs, size + offs);
+      ptr = rprealloc((char *)ptr - offs, size + offs);
     #else
-        ptr = realloc((char *)ptr - offs, size + offs);
-    #endif
+      ptr = realloc((char *) ptr - offs, size + offs);
+    #endif 
 
     if (!ptr) {
-        char msg[100];
+        static char msg[100];
         sprintf(msg, "memory re-allocation (size %u) failed!", size);
         panic_moo(msg);
     }
 
-    return (char *)ptr + offs;
+    return (char *) ptr + offs;
 }
 
-void myfree(void *ptr, Memory_Type type) {
+void
+myfree(void *ptr, Memory_Type type)
+{
     #ifdef CUSTOM_ALLOC
-        rpfree((char*)ptr - refcount_overhead(type));
+      rpfree((char *)ptr - refcount_overhead(type));
     #else
-        free((char*)ptr - refcount_overhead(type));
+      free((char *) ptr - refcount_overhead(type));
     #endif
 }

@@ -156,4 +156,17 @@ free_str(const char *s) {
 
 #endif /* MEMO_STRLEN */
 
+#define IS_POWER_OF_TWO(v) (v & -v) == v
+
+static inline int next_power_of_two(unsigned int v) { // compute the next highest power of 2 of 32-bit v
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return static_cast<int>(v);
+}
+
 #endif /* STORAGE_H */
