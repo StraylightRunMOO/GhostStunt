@@ -256,6 +256,7 @@ set(src_SERVER
     ${src_CXXSRCS})
 
 add_executable(moo ${src_SERVER})
+target_link_libraries(moo -ldl)
 
 # Make sure we have the packages we need
 include_directories(${NETTLE_INCLUDE_DIRS})
