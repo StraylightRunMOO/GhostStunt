@@ -955,10 +955,33 @@ bf_relative_heading(Var arglist, Byte next, void *vdata, Objid progr)
     z = atan2(dz, sqrt((dx * dx) + (dy * dy))) * 57.2957795130823;
 
     Var s = new_list(2);
-    s.v.list[1].type = TYPE_INT;
-    s.v.list[1].v.num = (int)xy;
-    s.v.list[2].type = TYPE_INT;
-    s.v.list[2].v.num = (int)z;
+    s.v.list[1].type = TYPE_FLOAT;
+    s.v.list[1].v.num = (double)xy;
+    s.v.list[2].type = TYPE_FLOAT;
+    s.v.list[2].v.num = (double)z;
+
+    free_var(arglist);
+
+    return make_var_pack(s);
+}
+
+/* Calculates the bearing between two sets of three dimensional floating point coordinates. */
+static package
+bf_lerp(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    if(arglist.v.list[1].v.list[0].v.num != 3 || arglist.v.list[2].v.list[0].v.num != 3) {
+        free_var(arglist);
+        return make_error_pack(E_INVARG);
+    } else if (arglist.v.list[1].v.list[1].type != TYPE_FLOAT || arglist.v.list[1].v.list[2].type != TYPE_FLOAT || arglist.v.list[1].v.list[3].type != TYPE_FLOAT || arglist.v.list[2].v.list[1].type != TYPE_FLOAT || arglist.v.list[2].v.list[2].type != TYPE_FLOAT 
+    || arglist.v.list[2].v.list[3].type != TYPE_FLOAT || arglist.v.list[3].type != TYPE_FLOAT) {
+        free_var(arglist);
+        return make_error_pack(E_TYPE);
+    }
+
+    Var s = new_list(3);
+    for(auto count = 1; count <=3; count++) {
+        s.v.list[count] = Var::new_float(arglist.v.list[1].v.list[count].v.fnum + ((arglist.v.list[2].v.list[count].v.fnum - arglist.v.list[1].v.list[count].v.fnum) * arglist.v.list[3].v.fnum));
+    }
 
     free_var(arglist);
 
@@ -1017,4 +1040,5 @@ register_numbers(void)
     /* Possibly misplaced functions... */
     register_function("distance", 2, 2, bf_distance, TYPE_LIST, TYPE_LIST);
     register_function("relative_heading", 2, 2, bf_relative_heading, TYPE_LIST, TYPE_LIST);
+    register_function("lerp", 3, 3, bf_lerp, TYPE_LIST, TYPE_LIST, TYPE_FLOAT);
 }
