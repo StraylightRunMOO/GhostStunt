@@ -31,6 +31,7 @@
 #include "my-math.h"
 #include <stdlib.h>
 #include <string>
+#include <vector>
 #include <ctime>
 #include <time.h>
 #include <iostream>
@@ -965,27 +966,28 @@ bf_relative_heading(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(s);
 }
 
-/* Calculates the bearing between two sets of three dimensional floating point coordinates. */
+/* Linear interpolation. */
 static package
 bf_lerp(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    if(arglist.v.list[1].v.list[0].v.num != 3 || arglist.v.list[2].v.list[0].v.num != 3) {
+    std::vector<Var> start = list_to_vector(arglist.v.list[1]);
+    std::vector<Var> end = list_to_vector(arglist.v.list[2]);
+    
+    auto f = arglist.v.list[3].v.fnum;
+    auto sz = start.size();
+
+    if(sz != end.size()) {
         free_var(arglist);
         return make_error_pack(E_INVARG);
-    } else if (arglist.v.list[1].v.list[1].type != TYPE_FLOAT || arglist.v.list[1].v.list[2].type != TYPE_FLOAT || arglist.v.list[1].v.list[3].type != TYPE_FLOAT || arglist.v.list[2].v.list[1].type != TYPE_FLOAT || arglist.v.list[2].v.list[2].type != TYPE_FLOAT 
-    || arglist.v.list[2].v.list[3].type != TYPE_FLOAT || arglist.v.list[3].type != TYPE_FLOAT) {
-        free_var(arglist);
-        return make_error_pack(E_TYPE);
     }
 
-    Var s = new_list(3);
-    for(auto count = 1; count <=3; count++) {
-        s.v.list[count] = Var::new_float(arglist.v.list[1].v.list[count].v.fnum + ((arglist.v.list[2].v.list[count].v.fnum - arglist.v.list[1].v.list[count].v.fnum) * arglist.v.list[3].v.fnum));
-    }
+    Var ret = new_list(sz);
+
+    for(auto i=1; i<=sz; i++)
+        ret.v.list[i] = Var::new_float(start[i-1].fnum() + ((end[i-1].fnum() - start[i-1].fnum()) * f));
 
     free_var(arglist);
-
-    return make_var_pack(s);
+    return make_var_pack(ret);
 }
 
 Var zero;           /* useful constant */

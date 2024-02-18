@@ -18,6 +18,8 @@
 #ifndef EXT_LIST_H
 #define EXT_LIST_H 1
 
+#include <vector>
+
 #include "structures.h"
 #include "streams.h"
 
@@ -100,3 +102,23 @@ for (idx = 1, cnt = lst.v.list[0].v.num;			\
 tp = var_ref(stck.v.list[1]);					\
 stck = listdelete(stck, 1);
 #endif
+
+static inline std::vector<Var> list_to_vector(Var list) {
+     std::vector<Var> vec;
+     vec.reserve(list.v.list[0].v.num);
+
+     for(auto i=1; i<=list.v.list[0].v.num; i++)
+          vec.emplace_back(list.v.list[i]);
+
+     return vec;
+}
+
+static inline Var vector_to_list(std::vector<Var> vec) {
+  auto sz = vec.size();
+  Var ret = new_list(sz);
+
+  for(auto i=1; i<=sz; i++)
+     ret.v.list[i] = vec[i-1];
+
+  return ret;
+}

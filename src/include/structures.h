@@ -175,29 +175,67 @@ struct Var {
     } v;
     var_type type;
 
-    bool
-    is_complex() {
-        return TYPE_COMPLEX_FLAG & type;
+    inline const char* str() {
+      return v.str;
     }
 
-    bool
-    is_none() {
-        return TYPE_NONE == type;
+    inline const char* str(char* s) {
+      type = TYPE_STR;
+      return v.str = s;
     }
 
-    bool
-    is_collection() {
-        return TYPE_LIST == type || TYPE_MAP == type || TYPE_ANON == type;
+    inline Num num() {
+      return TYPE_INT == type ? v.num : 0;
     }
 
-    bool
-    is_object() {
-        return TYPE_OBJ == type || TYPE_ANON == type || TYPE_WAIF == type;
+    inline UNum unum() {
+      return TYPE_INT == type ? static_cast<std::make_unsigned<uint64_t>::type>(v.num) : 0;
     }
 
-    bool
-    is_int() {
-        return TYPE_INT == type;
+    inline Num num(Num n) {
+      type = TYPE_INT;
+      return v.num = n;
+    }
+
+    inline double fnum() {
+      return TYPE_FLOAT == type ? v.fnum : 0.0;
+    }
+
+    inline double fnum(double n) {
+      type = TYPE_FLOAT;
+      return v.fnum = n;
+    }
+
+    bool is_complex() const {
+      return TYPE_COMPLEX_FLAG & type;
+    }
+
+    bool is_none() const {
+      return TYPE_NONE == type;
+    }
+
+    bool is_collection() const {
+      return TYPE_LIST == type || TYPE_MAP == type || TYPE_ANON == type;
+    }
+
+    bool is_object() const {
+      return TYPE_OBJ == type || TYPE_ANON == type || TYPE_WAIF == type;
+    }
+
+    bool is_int() const {
+      return TYPE_INT == type;
+    }
+
+    bool is_float() const {
+        return TYPE_FLOAT == type;
+    }
+
+    bool is_obj() const {
+      return TYPE_OBJ == type;
+    }
+
+    bool is_str() const {
+      return TYPE_STR == type;
     }
 
     static Var
@@ -216,22 +254,12 @@ struct Var {
         return v;
     }
 
-    bool
-    is_obj() const {
-        return TYPE_OBJ == type;
-    }
-
     static Var
     new_obj(const Objid &obj) {
         Var v;
         v.type = TYPE_OBJ;
         v.v.obj = obj;
         return v;
-    }
-
-    bool
-    is_str() const {
-        return TYPE_STR == type;
     }
 
     static Var
