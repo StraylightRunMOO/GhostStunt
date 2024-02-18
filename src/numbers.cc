@@ -972,7 +972,7 @@ bf_lerp(Var arglist, Byte next, void *vdata, Objid progr)
 {
     std::vector<Var> start = list_to_vector(arglist.v.list[1]);
     std::vector<Var> end = list_to_vector(arglist.v.list[2]);
-    
+
     auto f = arglist.v.list[3].v.fnum;
     auto sz = start.size();
 
@@ -984,7 +984,7 @@ bf_lerp(Var arglist, Byte next, void *vdata, Objid progr)
     Var ret = new_list(sz);
 
     for(auto i=1; i<=sz; i++)
-        ret.v.list[i] = Var::new_float(start[i-1].fnum() + ((end[i-1].fnum() - start[i-1].fnum()) * f));
+        ret.v.list[i].fnum(start[i-1].fnum() + ((end[i-1].fnum() - start[i-1].fnum()) * f));
 
     free_var(arglist);
     return make_var_pack(ret);

@@ -188,16 +188,15 @@ struct Var {
       return TYPE_INT == type ? v.num : 0;
     }
 
-    inline UNum unum() {
-      return TYPE_INT == type ? static_cast<std::make_unsigned<uint64_t>::type>(v.num) : 0;
-    }
-
     inline Num num(Num n) {
       type = TYPE_INT;
       return v.num = n;
     }
 
     inline double fnum() {
+      if(type == TYPE_INT)
+        return static_cast<double>(v.num);
+    
       return TYPE_FLOAT == type ? v.fnum : 0.0;
     }
 
