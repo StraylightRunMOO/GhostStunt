@@ -233,6 +233,10 @@ struct Var {
 
   bool is_collection() const { return TYPE_LIST == type || TYPE_MAP == type || TYPE_ANON == type; }
 
+  bool is_error() const { return TYPE_ERR == type; }
+
+  bool is_list() const { return TYPE_LIST == type; }
+
   bool is_object() const { return TYPE_OBJ == type || TYPE_ANON == type || TYPE_WAIF == type; }
 
   bool is_int() const { return TYPE_INT == type; }
@@ -277,6 +281,14 @@ struct Var {
     v.v.truth = value ? true : false;
     return v;
   }
+
+  static Var new_error(enum error err) {
+    Var v;
+    v.type = TYPE_ERR;
+    v.v.err = err;
+    return v;
+  }
+
 };
 
 inline Var str_dup_to_var(const char *s) {
