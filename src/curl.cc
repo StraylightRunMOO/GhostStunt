@@ -9,6 +9,7 @@
 #include "utils.h"
 #include "log.h"
 #include "background.h"
+#include "server.h"
 
 static CURL *curl_handle = nullptr;
 
@@ -38,9 +39,9 @@ CurlWriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
     return realsize;
 }
 
-static void curl_thread_callback(Var arglist, Var *ret)
+static void curl_thread_callback(Var arglist, Var *ret, void *extra_data)
 {
-    int nargs = arglist.v.list[0].v.num;
+    int nargs = arglist.length();
     CURL *curl_handle;
     CURLcode res;
     CurlMemoryStruct chunk;
@@ -48,21 +49,20 @@ static void curl_thread_callback(Var arglist, Var *ret)
 
     chunk.result = (char*)malloc(1);
     chunk.size = 0;
-    
+
     if (nargs > 2)
-        timeout = arglist.v.list[3].v.num;
+        timeout = arglist[3].v.num;
 
     curl_handle = curl_easy_init();
-    curl_easy_setopt(curl_handle, CURLOPT_URL, arglist.v.list[1].v.str);
-    curl_easy_setopt(curl_handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    curl_easy_setopt(curl_handle, CURLOPT_URL, arglist[1].v.str);
+    //curl_easy_setopt(curl_handle, CURLOPT_PROTOCOLS_STR, "http,https,dict");
     curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, CurlWriteMemoryCallback);
     curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
     curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
     curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, timeout);
 
-    if (nargs > 1 && is_true(arglist.v.list[2]))
+    if (nargs > 1 && is_true(arglist[2]))
         curl_easy_setopt(curl_handle, CURLOPT_HEADER, 1L);
-    
 
     res = curl_easy_perform(curl_handle);
 
@@ -70,7 +70,7 @@ static void curl_thread_callback(Var arglist, Var *ret)
         make_error_map(E_INVARG, curl_easy_strerror(res), ret);
     else {
         *ret = str_dup_to_var(raw_bytes_to_binary(chunk.result, chunk.size));
-        oklog("CURL: %lu bytes retrieved from: %s\n", (unsigned long)chunk.size, arglist.v.list[1].v.str);
+        oklog("CURL: %lu bytes retrieved from: %s\n", (unsigned long)chunk.size, arglist[1].v.str);
     }
 
     curl_easy_cleanup(curl_handle);
@@ -82,18 +82,20 @@ bf_curl(Var arglist, Byte next, void *vdata, Objid progr)
 {
     if (!is_wizard(progr))
         return make_error_pack(E_PERM);
+    else if (!outbound_network_enabled)
+        return make_raise_pack(E_PERM, "Outbound network connections are disabled.", zero);
 
-    char *human_string = nullptr;
-    asprintf(&human_string, "curl %s", arglist.v.list[1].v.str);
-
-    return background_thread(curl_thread_callback, &arglist, human_string);
+    return background_thread(curl_thread_callback, &arglist);
 }
 
 static package
 bf_url_encode(Var arglist, Byte next, void *vdata, Objid progr)
 {
+    if (!outbound_network_enabled)
+        return make_raise_pack(E_PERM, "Outbound network connections are disabled.", zero);
+
     Var r;
-    const char *url = arglist.v.list[1].v.str;
+    const char *url = arglist[1].v.str;
 
     char *encoded = curl_easy_escape(curl_handle, url, memo_strlen(url));
 
@@ -114,8 +116,11 @@ bf_url_encode(Var arglist, Byte next, void *vdata, Objid progr)
 static package
 bf_url_decode(Var arglist, Byte next, void *vdata, Objid progr)
 {
+    if (!outbound_network_enabled)
+        return make_raise_pack(E_PERM, "Outbound network connections are disabled.", zero);
+
     Var r;
-    const char *url = arglist.v.list[1].v.str;
+    const char *url = arglist[1].v.str;
 
     char *decoded = curl_easy_unescape(curl_handle, url, memo_strlen(url), nullptr);
 
@@ -135,20 +140,26 @@ bf_url_decode(Var arglist, Byte next, void *vdata, Objid progr)
 
 void curl_shutdown(void)
 {
-    curl_global_cleanup();
-    
-    if (curl_handle != nullptr)
-        curl_easy_cleanup(curl_handle);
+    if (outbound_network_enabled)
+    {
+        curl_global_cleanup();
+
+        if (curl_handle != nullptr)
+            curl_easy_cleanup(curl_handle);
+    }
 }
 
 void
 register_curl(void)
 {
-    oklog("REGISTER_CURL: Using libcurl version %s\n", curl_version());
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl_handle = curl_easy_init();
- 
-   register_function("curl", 1, 3, bf_curl, TYPE_STR, TYPE_ANY, TYPE_INT);
+    if (outbound_network_enabled)
+    {
+        oklog("REGISTER_CURL: Using libcurl version %s\n", curl_version());
+        curl_global_init(CURL_GLOBAL_ALL);
+        curl_handle = curl_easy_init();
+    }
+
+    register_function("curl", 1, 3, bf_curl, TYPE_STR, TYPE_ANY, TYPE_INT);
     register_function("url_encode", 1, 1, bf_url_encode, TYPE_STR);
     register_function("url_decode", 1, 1, bf_url_decode, TYPE_STR);
 }

@@ -29,7 +29,6 @@ enum Extended_Opcode {
     EOP_PUSH_LABEL, EOP_END_CATCH, EOP_END_EXCEPT, EOP_END_FINALLY,
     EOP_CONTINUE,
 
-    /* Adding extended function call to support more than 256 builtins */
     EOP_BI_FUNC_CALL,
 
     /* ops after this point cost one tick */
@@ -42,6 +41,8 @@ enum Extended_Opcode {
     /* bitwise operators */
     EOP_BITOR, EOP_BITAND, EOP_BITXOR,
     EOP_BITSHL, EOP_BITSHR, EOP_COMPLEMENT,
+
+    EOP_CALL_HANDLE,
 
     Last_Extended_Opcode = 255
 };

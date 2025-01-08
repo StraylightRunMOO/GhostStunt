@@ -36,6 +36,7 @@
 #include "functions.h"
 #include "json.h"
 #include "list.h"
+#include "log.h"
 #include "map.h"
 #include "numbers.h"
 #include "server.h"
@@ -85,7 +86,7 @@ struct stack_item {
 static void
 push(struct stack_item **top, Var v)
 {
-    struct stack_item *item = (struct stack_item *)malloc(sizeof(struct stack_item));
+    struct stack_item *item = (struct stack_item *)mymalloc(sizeof(struct stack_item), M_STRUCT);
     item->prev = *top;
     item->v = v;
     *top = item;
@@ -97,7 +98,7 @@ pop(struct stack_item **top)
     struct stack_item *item = *top;
     *top = item->prev;
     Var v = item->v;
-    free(item);
+    myfree(item, M_STRUCT);
     return v;
 }
 
@@ -106,7 +107,7 @@ pop(struct stack_item **top)
 #define POP(top) pop(&(top))
 
 typedef enum {
-    MODE_COMMON_SUBSET, MODE_EMBEDDED_TYPES
+    MODE_COMMON_SUBSET, MODE_EMBEDDED_TYPES, MODE_INFERRED_TYPES
 } mode_type;
 
 struct parse_context {
@@ -119,9 +120,6 @@ struct parse_context {
 struct generate_context {
     mode_type mode;
 };
-
-#define ARRAY_SENTINEL -1
-#define MAP_SENTINEL -2
 
 static const char *
 value_to_literal(Var v)
@@ -245,6 +243,56 @@ handle_number(void *ctx, const char *numberVal, unsigned int numberLen, yajl_tok
     return 0;
 }
 
+static inline Var infer_type(const char *str, size_t len) {
+    if(len > 20) return str_dup_to_var(str);
+
+    if(len > 1 && str[0] == '#') {
+        auto i = 1;
+
+        if(str[i] == '-' && len > 2) i++;
+
+        while(i < len)
+            if(str[i] < '0' || str[i] > '9')
+                return str_dup_to_var(str);
+            else
+                i++;
+
+        Var result;
+        if(sscanf(str+1, "%lld", &(result.v.obj)) > 0)
+            result.type = TYPE_OBJ;
+        else
+            result = str_dup_to_var(str);
+
+        return result;
+    } else if(len > 2 && str[0]=='E' && str[1]=='_') {
+        int e = parse_error(str);
+
+        if(e >= 0) {
+            Var error;
+            error.type = TYPE_ERR;
+            error.v.err = (enum error)e;
+            return error;
+        }
+        
+        return str_dup_to_var(str);
+    }
+
+    for(auto i = 0; i < len; i++)
+        if((str[i] < '0' || str[i] > '9') && str[i] != '.' && str[i] != '-' && str[i] != 'e' && str[i] != '+')
+            return str_dup_to_var(str);
+
+    Var result;
+    if(strchr(str, '.') && sscanf(str, "%lf", &(result.v.fnum)) > 0) {
+        result.type = TYPE_FLOAT;
+    } else if(sscanf(str, "%lld", &(result.v.num)) > 0) {
+        result.type = TYPE_INT;
+    } else {
+        result = str_dup_to_var(str);
+    }
+
+    return result;
+}
+
 static int
 handle_string(void *ctx, const unsigned char *stringVal, unsigned int stringLen)
 {
@@ -252,11 +300,14 @@ handle_string(void *ctx, const unsigned char *stringVal, unsigned int stringLen)
     var_type type;
     Var v;
 
-    const char *val = (const char *)stringVal;
     size_t len = (size_t)stringLen;
+    char *val = (char*)mymalloc(len + 1, M_STRUCT);
+    strncpy(val, (const char*)stringVal, len);
+    val[len] = '\0';
 
-    if (MODE_EMBEDDED_TYPES == pctx->mode
-            && TYPE_NONE != (type = valid_type(&val, &len))) {
+    if(MODE_INFERRED_TYPES == pctx->mode) {
+        v = infer_type(val, len);
+    } else if (MODE_EMBEDDED_TYPES == pctx->mode && TYPE_NONE != (type = valid_type((const char**)&val, &len))) {
         switch (type) {
             case TYPE_OBJ:
             {
@@ -308,7 +359,10 @@ handle_string(void *ctx, const unsigned char *stringVal, unsigned int stringLen)
         temp[len] = '\0';
         v.type = TYPE_STR;
         v.v.str = str_dup(temp);
+        v = str_dup_to_var(val);
     }
+
+    myfree(val, M_STRUCT);
 
     PUSH(pctx->top, v);
     return 1;
@@ -323,9 +377,9 @@ handle_start_map(void *ctx)
         return 0;
 
     Var k, v;
-    k.type = (var_type)MAP_SENTINEL;
+    k.type = TYPE_CLEAR;
     PUSH(pctx->top, k);
-    v.type = (var_type)MAP_SENTINEL;
+    v.type = TYPE_CLEAR;
     PUSH(pctx->top, v);
     pctx->depth++;
     return 1;
@@ -335,10 +389,10 @@ static int
 handle_end_map(void *ctx)
 {
     struct parse_context *pctx = (struct parse_context *)ctx;
-    Var map = new_map();
+    Var map = new_map(0);
     Var k, v;
     for (v = POP(pctx->top), k = POP(pctx->top);
-            (int)v.type > MAP_SENTINEL && (int)k.type > MAP_SENTINEL;
+            (int)v.type != TYPE_CLEAR && (int)k.type != TYPE_CLEAR;
             v = POP(pctx->top), k = POP(pctx->top)) {
         map = mapinsert(map, k, v);
     }
@@ -356,7 +410,7 @@ handle_start_array(void *ctx)
         return 0;
 
     Var v;
-    v.type = (var_type)ARRAY_SENTINEL;
+    v.type = TYPE_CLEAR;
     PUSH(pctx->top, v);
     pctx->depth++;
     return 1;
@@ -368,7 +422,7 @@ handle_end_array(void *ctx)
     struct parse_context *pctx = (struct parse_context *)ctx;
     Var list = new_list(0);
     Var v;
-    for (v = POP(pctx->top); (int)v.type > ARRAY_SENTINEL;
+    for (v = POP(pctx->top); (int)v.type != TYPE_CLEAR;
             v = POP(pctx->top)) {
         list = listinsert(list, v, 1);
     }
@@ -421,33 +475,6 @@ struct do_closure {
     yajl_gen_status status;
 };
 
-static int
-do_map(Var key, Var value, void *data, int first)
-{
-    struct do_closure *dmc = (struct do_closure *)data;
-
-    dmc->status = generate_key(dmc->g, key, dmc->gctx);
-    if (yajl_gen_status_ok != dmc->status)
-        return 1;
-    dmc->status = generate(dmc->g, value, dmc->gctx);
-    if (yajl_gen_status_ok != dmc->status)
-        return 1;
-
-    return 0;
-}
-
-static int
-do_list(Var value, void *data, int first)
-{
-    struct do_closure *dmc = (struct do_closure *)data;
-
-    dmc->status = generate(dmc->g, value, dmc->gctx);
-    if (yajl_gen_status_ok != dmc->status)
-        return 1;
-
-    return 0;
-}
-
 static yajl_gen_status
 generate(yajl_gen g, Var v, void *ctx)
 {
@@ -482,8 +509,19 @@ generate(yajl_gen g, Var v, void *ctx)
             dmc.gctx = gctx;
             dmc.status = yajl_gen_status_ok;
             yajl_gen_map_open(g);
-            if (mapforeach(v, do_map, &dmc))
-                return dmc.status;
+
+            if (mapforeach(v, [&dmc](Var key, Var value, int index) -> int {
+               dmc.status = generate_key(dmc.g, key, dmc.gctx);
+               if (yajl_gen_status_ok != dmc.status)
+                   return 1;
+
+               dmc.status = generate(dmc.g, value, dmc.gctx);
+               if (yajl_gen_status_ok != dmc.status)
+                   return 1;
+
+               return 0;
+            })) return dmc.status;
+
             yajl_gen_map_close(g);
             return yajl_gen_status_ok;
         }
@@ -494,8 +532,12 @@ generate(yajl_gen g, Var v, void *ctx)
             dmc.gctx = gctx;
             dmc.status = yajl_gen_status_ok;
             yajl_gen_array_open(g);
-            if (listforeach(v, do_list, &dmc))
-                return dmc.status;
+
+            if (listforeach(v, [&dmc](Var value, int index) -> int {
+                dmc.status = generate(dmc.g, value, dmc.gctx);
+                return (dmc.status == yajl_gen_status_ok) ? 0 : 1;
+            })) return dmc.status;
+
             yajl_gen_array_close(g);
             return yajl_gen_status_ok;
         }
@@ -535,20 +577,22 @@ bf_parse_json(Var arglist, Byte next, void *vdata, Objid progr)
     pctx.top = &pctx.stack;
     pctx.stack.v.type = TYPE_INT;
     pctx.stack.v.v.num = 0;
-    pctx.mode = MODE_COMMON_SUBSET;
+    pctx.mode = MODE_INFERRED_TYPES;
     pctx.depth = 0;
 
-    const char *str = arglist.v.list[1].v.str;
+    const char *str = arglist[1].v.str;
     size_t len = strlen(str);
 
     package pack;
 
     int done = 0;
 
-    if (1 < arglist.v.list[0].v.num) {
-        if (!strcasecmp(arglist.v.list[2].v.str, "common-subset")) {
+    if (arglist.length() >= 2) {
+        if (!strcasecmp(arglist[2].v.str, "inferred-types")) {
+            pctx.mode = MODE_INFERRED_TYPES;
+        } else if (!strcasecmp(arglist[2].v.str, "common-subset")) {
             pctx.mode = MODE_COMMON_SUBSET;
-        } else if (!strcasecmp(arglist.v.list[2].v.str, "embedded-types")) {
+        } else if (!strcasecmp(arglist[2].v.str, "embedded-types")) {
             pctx.mode = MODE_EMBEDDED_TYPES;
         } else {
             free_var(arglist);
@@ -603,13 +647,12 @@ bf_generate_json(Var arglist, Byte next, void *vdata, Objid progr)
     unsigned int len;
 
     Var json;
-
     package pack;
 
-    if (1 < arglist.v.list[0].v.num) {
-        if (!strcasecmp(arglist.v.list[2].v.str, "common-subset")) {
+    if (arglist.length() >= 2) {
+        if (!strcasecmp(arglist[2].v.str, "common-subset") || !strcasecmp(arglist[2].v.str, "inferred-types")) {
             gctx.mode = MODE_COMMON_SUBSET;
-        } else if (!strcasecmp(arglist.v.list[2].v.str, "embedded-types")) {
+        } else if (!strcasecmp(arglist[2].v.str, "embedded-types")) {
             gctx.mode = MODE_EMBEDDED_TYPES;
         } else {
             free_var(arglist);
@@ -619,7 +662,7 @@ bf_generate_json(Var arglist, Byte next, void *vdata, Objid progr)
 
     g = yajl_gen_alloc(&cfg, nullptr);
 
-    if (yajl_gen_status_ok == generate(g, arglist.v.list[1], &gctx)) {
+    if (yajl_gen_status_ok == generate(g, arglist[1], &gctx)) {
         yajl_gen_get_buf(g, (const unsigned char **)&buf, &len);
 
         json.type = TYPE_STR;

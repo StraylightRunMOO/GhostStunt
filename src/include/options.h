@@ -49,9 +49,22 @@
  * because it will lose track of cyclic data structures.
  */
 
-#define ENABLE_GC
+/* #define ENABLE_GC */
 
-#define GC_ROOTS_LIMIT 2000
+/* #define GC_ROOTS_LIMIT 2000 */
+
+/******************************************************************************
+ * Enable/disable the custom allocator and set some basic options below.
+ * More advanced options including stats / fine-grained performance tuning
+ * can be found in /src/dependencies/rpmalloc.c
+*/
+
+#define USE_RPMALLOC
+
+#ifdef USE_RPMALLOC
+  #define ALLOC_PAGE_SIZE   0
+  #define ALLOC_ENABLE_HUGE 1
+#endif 
 
 /******************************************************************************
  * Define LOG_GC_STATS to enabled logging of reference cycle collection
@@ -173,6 +186,22 @@
 #define OUTBOUND_NETWORK 1
 
 /******************************************************************************
+ * These options control the default values for the TCP keep-alive connection option.
+ * When set_connection_option(<con>, "keep-alive", <value>) is given a true <value>,
+ * these defaults will be used. When given a MAP of options for <value>, the defaults
+ * will be used for values that don't appear in the option MAP. These options are:
+ * 
+ * KEEP_ALIVE_DEFAULT:   Whether keep-alive is enabled for all new connections by default.
+ * KEEP_ALIVE_IDLE:      The time (in seconds) before starting keep-alive probes.
+ * KEEP_ALIVE_INTERVAL:: The time (in seconds) between keep-alive probes.
+ * KEEP_ALIVE_COUNT:     The number of failed keep-alive probes before disconnecting.
+ */
+#define KEEP_ALIVE_DEFAULT    true
+#define KEEP_ALIVE_IDLE       300
+#define KEEP_ALIVE_INTERVAL   120
+#define KEEP_ALIVE_COUNT      5
+
+/******************************************************************************
  * The server supports secure TLS connections using the OpenSSL library.
  * If USE_TLS is defined, you will be able to listen() for TLS connections
  * and connect to TLS servers using open_network_connection().
@@ -192,7 +221,7 @@
  * DEFAULT_TLS_KEY can be overridden with the command-line option --tls-key (-k)
  */
 
-//#define USE_TLS
+#define USE_TLS
 #define VERIFY_TLS_PEERS
 #define DEFAULT_TLS_CERT    "/etc/letsencrypt/live/fullchain.pem"
 #define DEFAULT_TLS_KEY     "/etc/letsencrypt/live/privkey.pem"
@@ -318,20 +347,13 @@
 #define STRING_INTERNING /* */
 
 /******************************************************************************
- * Store the length of the string WITH the string rather than recomputing
- * it each time it is needed.
+ * For size operations, store the data with the type rather than recomputing.
+ * String:     Store the length of the string.
+ * List / Map: Store the number of bytes of storage used.
  ******************************************************************************
- */
+*/
 
-#define MEMO_STRLEN /* */
-
-/******************************************************************************
- * Store the number of bytes of storage used by lists/maps WITH the list/map
- * rather than recomputing it each time it is needed.
- ******************************************************************************
- */
-
-#define MEMO_VALUE_BYTES /* */
+#define MEMO_SIZE
 
 /******************************************************************************
  * DEFAULT_MAX_STRING_CONCAT,      if set to a positive value, is the length
@@ -380,7 +402,7 @@
  ******************************************************************************
  */
 
-/* #define PLAYER_HUH 1 */
+#define PLAYER_HUH 1
 
 /******************************************************************************
  * Configurable options for the Exec subsystem.  EXEC_SUBDIR is the
@@ -437,6 +459,7 @@
  * use in other applications is minimal, as the cache is invalidated often.
  ******************************************************************************
 */
+
 #define USE_ANCESTOR_CACHE
 
 /******************************************************************************
@@ -515,8 +538,8 @@
  ******************************************************************************
  */
 
-#define TOTAL_BACKGROUND_THREADS    0
-#define DEFAULT_THREAD_MODE         false
+#define TOTAL_BACKGROUND_THREADS    2
+#define DEFAULT_THREAD_MODE         true
 
 /******************************************************************************
  * By default, the server will resolve DNS hostnames from IP addresses for all
@@ -545,31 +568,22 @@
 
 #define CURL_TIMEOUT 60
 
-
 /******************************************************************************
- * Uncomment the line below to use a non-atomic type for reference counts.
- * This should work fine and provide a performance bump in a single-threaded
- * configuration, but may cause problems when thread pool is enabled
+ * The default maximum number of seconds a curl() transfer can last.
 */
-#define UNSAFE_REFCOUNT
 
-
-/******************************************************************************
- * Enable/disable the custom allocator and set some basic options below.
- * More advanced options including stats / fine-grained performance tuning
- * can be found in /src/dependencies/rpmalloc.c
-*/
-#define CUSTOM_ALLOC
-
-#if defined(CUSTOM_ALLOC)
-  #define ALLOC_PAGE_SIZE   4*1024*1024
-  #define ALLOC_SPAN_COUNT  64
-  #define ALLOC_ENABLE_HUGE 1
-#endif 
+#define MAP_SAVE_INSERTION_ORDER_DEFAULT 1
+#define MAP_HASH_SEED0 1099511627776
+#define MAP_HASH_SEED1 549755813881
+#define MAP_HASH_FUNCTION hashmap_sip
 
 /*****************************************************************************
  ********** You shouldn't need to change anything below this point. **********
  *****************************************************************************/
+
+#ifndef MAP_SAVE_INSERTION_ORDER_DEFAULT
+#define MAP_SAVE_INSERTION_ORDER_DEFAULT 0
+#endif
 
 #ifndef PLAYER_HUH
 #define PLAYER_HUH 0

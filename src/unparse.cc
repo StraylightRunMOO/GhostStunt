@@ -17,6 +17,8 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <sstream>
+#include <strings.h>
 
 #include "ast.h"
 #include "config.h"
@@ -194,6 +196,7 @@ parse_type(var_type var)
         return "any type";
 
     switch (var) {
+        case _TYPE_TYPE:
         case TYPE_INT:
             return "integer";
         case TYPE_OBJ:
@@ -217,6 +220,120 @@ parse_type(var_type var)
         default:
             return "unknown type";
     }
+}
+
+const char*
+parse_type_multi(var_type var)
+{
+
+    Var s, t = new_list(0);
+    s.type = TYPE_STR;
+
+    if (var == TYPE_ANY)
+        return str_dup("any type");
+    else if ((var & TYPE_NUMERIC) == TYPE_NUMERIC)
+        return str_dup("number");
+
+    if((var & TYPE_INT) == TYPE_INT || var == _TYPE_TYPE)
+        t = listappend(t, str_dup_to_var("integer"));
+    if((var & TYPE_OBJ) == TYPE_OBJ)
+        t = listappend(t, str_dup_to_var("object"));
+    if((var & TYPE_ERR) == TYPE_ERR)
+        t = listappend(t, str_dup_to_var("error"));
+    if((var & TYPE_STR) == TYPE_STR)
+        t = listappend(t, str_dup_to_var("string"));
+    if((var & TYPE_FLOAT) == TYPE_FLOAT)
+        t = listappend(t, str_dup_to_var("float"));
+    if((var & TYPE_LIST) == TYPE_LIST)
+        t = listappend(t, str_dup_to_var("list"));
+    if((var & TYPE_MAP) == TYPE_MAP)
+        t = listappend(t, str_dup_to_var("map"));
+    if((var & TYPE_ANON) == TYPE_ANON)
+        t = listappend(t, str_dup_to_var("anonymous object"));
+    if((var & TYPE_WAIF) == TYPE_WAIF)
+        t = listappend(t, str_dup_to_var("waif"));
+    if((var & TYPE_BOOL) == TYPE_BOOL)
+        t = listappend(t, str_dup_to_var("bool"));
+    if((var & TYPE_COMPLEX) == TYPE_COMPLEX)
+        t = listappend(t, str_dup_to_var("complex"));
+
+    auto len = t.length();
+    if(len == 0) return "unknown type";
+
+    std::ostringstream buffer; 
+
+    if(len == 1) {
+        buffer << t[1].str();
+    } else if(len == 2) {
+        buffer << t[1].v.str << " or " << t[2].v.str;
+    } else {
+        listforeach(t, [&len, &buffer](Var value, int index) -> int {
+            buffer << value.str() << ", ";
+            return index == (len - 1) ? 1 : 0;
+        });
+
+        buffer << "or " << t[len].str();
+    }
+
+    const char *result = str_dup(buffer.str().c_str());
+    free_var(t);
+    return result;
+}
+
+const char*
+parse_type_literal(var_type var)
+{
+    Var s, t = new_list(0);
+    s.type = TYPE_STR;
+
+    if((var & TYPE_INT) == TYPE_INT || var == _TYPE_TYPE)
+        t = listappend(t, str_dup_to_var("INT"));
+    if((var & TYPE_OBJ) == TYPE_OBJ)
+        t = listappend(t, str_dup_to_var("OBJ"));
+    if((var & TYPE_ERR) == TYPE_ERR)
+        t = listappend(t, str_dup_to_var("ERR"));
+    if((var & _TYPE_STR) == _TYPE_STR)
+        t = listappend(t, str_dup_to_var("STR"));
+    if((var & TYPE_FLOAT) == TYPE_FLOAT)
+        t = listappend(t, str_dup_to_var("FLOAT"));
+    if((var & _TYPE_LIST) == _TYPE_LIST)
+        t = listappend(t, str_dup_to_var("LIST"));
+    if((var & _TYPE_MAP) == _TYPE_MAP)
+        t = listappend(t, str_dup_to_var("MAP"));
+    if((var & _TYPE_ANON) == _TYPE_ANON)
+        t = listappend(t, str_dup_to_var("ANON"));
+    if((var & _TYPE_WAIF) == _TYPE_WAIF)
+        t = listappend(t, str_dup_to_var("WAIF"));
+    if((var & TYPE_BOOL) == TYPE_BOOL)
+        t = listappend(t, str_dup_to_var("BOOL"));
+    if((var & _TYPE_CALL) == _TYPE_CALL)
+        t = listappend(t, str_dup_to_var("CALL"));
+    if((var & TYPE_COMPLEX) == TYPE_COMPLEX)
+        t = listappend(t, str_dup_to_var("COMPLEX"));
+    if((var & _TYPE_MATRIX) == _TYPE_MATRIX)
+        t = listappend(t, str_dup_to_var("MAT"));
+
+    auto len = t.length();
+    if(len == 0) return "unknown type";
+
+    std::ostringstream buffer; 
+
+    if(len == 1) {
+        buffer << t[1].str();
+    } else if(len == 2) {
+        buffer << t[1].v.str << "|." << t[2].v.str;
+    } else {
+        listforeach(t, [&len, &buffer](Var value, int index) -> int {
+            buffer << value.str() << "|.";
+            return index == (len - 1) ? 1 : 0;
+        });
+
+        buffer << t[len].str();
+    }
+
+    const char *result = str_dup(buffer.str().c_str());
+    free_var(t);
+    return result;
 }
 
 struct prec {
@@ -272,7 +389,8 @@ static struct prec prec_table[] =
     {EXPR_CALL, 12},
     {EXPR_FIRST, 12},
     {EXPR_LAST, 12},
-    {EXPR_CATCH, 12}
+    {EXPR_CATCH, 12},
+    {EXPR_CALL_HANDLE, 12}
 };
 
 static int expr_prec[SizeOf_Expr_Kind];
@@ -658,7 +776,22 @@ unparse_expr(Stream * str, Expr * expr)
             unparse_arglist(str, expr->e.verb.args);
             stream_add_char(str, ')');
             break;
-
+        case EXPR_CALL_HANDLE:
+            if (expr->e.verb.obj->kind == EXPR_VAR
+                    && expr->e.verb.obj->e.var.type == TYPE_OBJ
+                    && expr->e.verb.obj->e.var.v.obj == 0
+                    && expr->e.verb.verb->kind == EXPR_VAR
+                    && expr->e.verb.verb->e.var.type == TYPE_STR
+                    && ok_identifier(expr->e.verb.verb->e.var.v.str)) {
+                stream_add_char(str, '$');
+                stream_add_string(str, expr->e.verb.verb->e.var.v.str);
+            } else {
+                bracket_lt(str, EXPR_VERB, expr->e.verb.obj);
+                stream_add_char(str, ':');
+                stream_add_char(str, ':');
+                unparse_name_expr(str, expr->e.verb.verb);
+            }
+            break;
         case EXPR_INDEX:
             bracket_lt(str, EXPR_INDEX, expr->e.bin.lhs);
             stream_add_char(str, '[');

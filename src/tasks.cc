@@ -164,10 +164,7 @@ typedef struct tqueue {
      *
      * If an unconnected queue becomes empty, it is destroyed.
      */
-    struct tqueue *next, **prev;    /* prev only valid on idle_tqueues */
-    Objid player;
-    Objid handler;
-    int connected;
+    struct tqueue *next, **prev;    /* prev only valid on idle_tqueues */       
     task *first_input, **last_input;
     task *first_itail, **last_itail;
     /* The input queue alternates between contiguous sequences of TASK_OOBs
@@ -181,33 +178,11 @@ typedef struct tqueue {
      * For tasks not at the end of a sequence,
      *   the next_itail field is ignored and may be garbage.
      */
-    int total_input_length;
-    int last_input_task_id;
-    int input_suspended;
 
     task *first_bg, **last_bg;
-    int usage;          /* a kind of inverted priority */
-    int num_bg_tasks;       /* in either here or waiting_tasks */
     char *output_prefix, *output_suffix;
     const char *flush_cmd;
-
-    /* Used in emergency mode and when handling the `.program'
-     * intrinsic command.  `program_object' _could_ be changed to hold
-     * a reference to either a permanent or anonymous object, however
-     * the reader only handles object numbers, so for now we leave
-     * it as an `Objid'.
-     */
-    Stream *program_stream;
-    Objid program_object;
-    const char *program_verb;
-
-    /* booleans */
-    int hold_input: 1;      /* input tasks must wait for read() */
-    int disable_oob: 1;     /* treat all input lines as inband */
-    int reading: 1;     /* some task is blocked on read() */
-    int parsing: 1;     /* some task is blocked on read_http() */
-    int icmds: 8;       /* which of .program/PREFIX/... are enabled */
-
+    
     /* Once a `http_parsing_state' is allocated and assigned to a task
      * queue, it is not freed until the task queue is freed -- the
      * theory being that once a connection is used for HTTP it's
@@ -216,6 +191,31 @@ typedef struct tqueue {
     struct http_parsing_state *parsing_state;
 
     vm reading_vm;
+    Objid player;
+    Objid handler;
+    int connected;
+    int total_input_length;
+    int last_input_task_id;
+    int input_suspended;
+    int usage;              /* a kind of inverted priority */
+    int num_bg_tasks;       /* in either here or waiting_tasks */
+
+    /* Used in emergency mode and when handling the `.program'
+     * intrinsic command.  `program_object' _could_ be changed to hold
+     * a reference to either a permanent or anonymous object, however
+     * the reader only handles object numbers, so for now we leave
+     * it as an `Objid'.
+     */
+    Stream *program_stream;
+    const char *program_verb;
+    Objid program_object;
+
+    /* booleans */
+    int icmds: 8;           /* which of .program/PREFIX/... are enabled */
+    bool hold_input;        /* input tasks must wait for read() */
+    bool disable_oob;       /* treat all input lines as inband */
+    bool reading;           /* some task is blocked on read() */
+    bool parsing;           /* some task is blocked on read_http() */
 } tqueue;
 
 typedef struct ext_queue {
@@ -236,15 +236,18 @@ static ext_queue *external_queues = nullptr;
 #ifdef SAVE_FINISHED_TASKS
 Var finished_tasks = new_list(0);
 #endif
+std::mutex task_queue_mutex;
+std::condition_variable task_queue_condition;
+bool task_queue_ready = false;
 
 /*
  * Forward declarations for functions that operate on external queues.
  */
 struct qcl_data {
-    Objid progr;
-    int show_all;
-    int i;
     Var tasks;
+    Objid progr;
+    int i;
+    bool show_all;
 };
 
 static task_enum_action
@@ -327,11 +330,11 @@ icmd_set_flags(tqueue * tq, Var list)
         return 0;
     else {
         newflags = 0;
-        for (i = 1; i <= list.v.list[0].v.num; ++i) {
+        for (i = 1; i <= list.length(); ++i) {
             int icmd;
-            if (list.v.list[i].type != TYPE_STR)
+            if (list[i].type != TYPE_STR)
                 return 0;
-            icmd = icmd_index(list.v.list[i].v.str);
+            icmd = icmd_index(list[i].v.str);
             if (!icmd)
                 return 0;
             newflags |= (1 << icmd);
@@ -776,10 +779,10 @@ do_intrinsic_command(tqueue * tq, Parsed_Command * pc)
         case ICMD_PROGRAM:
             if (!is_programmer(tq->player))
                 return 0;
-            if (pc->args.v.list[0].v.num != 1)
+            if (pc->args.length() != 1)
                 notify(tq->player, "Usage:  .program object:verb");
             else
-                start_programming(tq, (char *) pc->args.v.list[1].v.str);
+                start_programming(tq, (char *) pc->args[1].v.str);
             break;
         case ICMD_PREFIX:
         case ICMD_OUTPUTPREFIX:
@@ -885,7 +888,7 @@ do_login_task(tqueue * tq, char *command)
     bool clear_command = false; /* A flag that determines whether or not do_login_command
                                    will fall through with a blank command */
 
-    if (server_int_option("proxy_rewrite", 1) && is_localhost(tq->player))
+    if (is_trusted_proxy(tq->player))
     {
         /* To avoid printing the login screen (and allow redlists to work), ignore blank lines coming from localhost.
          * For special circumstances, the user can override this behavior with a 'do_blank_command' verb on the listening object.
@@ -1009,44 +1012,44 @@ free_task_queue(task_queue q)
         ensure_usage(tq);
 }
 
-#define TASK_CO_TABLE(DEFINE, tq, value, _)             \
-    DEFINE(flush-command, _, TYPE_STR, str,             \
-           tq->flush_cmd ? str_ref(tq->flush_cmd) : str_dup(""),    \
-           {                                \
-                                            if (tq->flush_cmd)                   \
-                                            free_str(tq->flush_cmd);             \
-                                            if (value.type == TYPE_STR && value.v.str[0] != '\0')    \
-                                                tq->flush_cmd = str_ref(value.v.str);        \
-                                                else                         \
-                                                    tq->flush_cmd = 0;                   \
-                   })                               \
-                \
-                DEFINE(hold-input, _, TYPE_INT, num,                \
-                       tq->hold_input,                      \
-                       {                                \
-                                                        tq->hold_input = is_true(value);             \
-                                                        /* Anything to be done? */               \
-                                                        if (!tq->hold_input && tq->first_input)          \
-                                                        ensure_usage(tq);                    \
-                       })                               \
-                    \
-                    DEFINE(disable-oob, _, TYPE_INT, num,               \
-                           tq->disable_oob,                     \
-                           {                                \
-                                                            tq->disable_oob = is_true(value);            \
-                                                            /* Anything to be done? */               \
-                                                            if (!tq->disable_oob && tq->first_input          \
-                                                                    && (tq->first_itail->next                \
-                                                                            || tq->first_input->kind == TASK_OOB))       \
-                                                            ensure_usage(tq);                    \
-                           })                               \
-                        \
-                        DEFINE(intrinsic-commands, _, TYPE_LIST, list,          \
-                               icmd_list(tq->icmds).v.list,                 \
-                               {                                \
-                                                                if (!icmd_set_flags(tq, value))              \
-                                                                return 0;                        \
-                               })                               \
+#define TASK_CO_TABLE(DEFINE, tq, value, _)                                 \
+    DEFINE(flush-command, _, TYPE_STR, str,                                 \
+           tq->flush_cmd ? str_ref(tq->flush_cmd) : str_dup(""),            \
+           {                                                                \
+                if (tq->flush_cmd)                                          \
+                    free_str(tq->flush_cmd);                                \
+                    if (value.type == TYPE_STR && value.v.str[0] != '\0')   \
+                        tq->flush_cmd = str_ref(value.v.str);               \
+                    else                                                    \
+                        tq->flush_cmd = 0;                                  \
+            })                                                              \
+                                                                            \
+    DEFINE(hold-input, _, TYPE_INT, num,                                    \
+            tq->hold_input,                                                 \
+            {                                                               \
+                tq->hold_input = is_true(value);                            \
+                /* Anything to be done? */                                  \
+                if (!tq->hold_input && tq->first_input)                     \
+                    ensure_usage(tq);                                       \
+            })                                                              \
+                                                                            \
+    DEFINE(disable-oob, _, TYPE_INT, num,                                   \
+            tq->disable_oob,                                                \
+            {                                                               \
+                tq->disable_oob = is_true(value);                           \
+                /* Anything to be done? */                                  \
+                if (!tq->disable_oob && tq->first_input                     \
+                    && (tq->first_itail->next                               \
+                    || tq->first_input->kind == TASK_OOB))                  \
+                    ensure_usage(tq);                                       \
+            })                                                              \
+                                                                            \
+    DEFINE(intrinsic-commands, _, TYPE_LIST, list,                          \
+            icmd_list(tq->icmds).v.list,                                    \
+            {                                                               \
+                if (!icmd_set_flags(tq, value))                             \
+                    return 0;                                               \
+            })                                                              \
 
 int
 tasks_set_connection_option(task_queue q, const char *option, Var value)
@@ -1480,7 +1483,7 @@ static int
 on_message_begin_callback(http_parser *parser)
 {
     struct http_parsing_state *state = (struct http_parsing_state *)parser;
-    state->result = new_map();
+    state->result = new_map(0);
     return 0;
 }
 
@@ -1497,7 +1500,7 @@ maybe_complete_header(struct http_parsing_state *state)
 {
     if (state->headers.type != TYPE_MAP) {
         free_var(state->headers);
-        state->headers = new_map();
+        state->headers = new_map(0);
     }
 
     if (state->header_value_under_constr.type == TYPE_STR) {
@@ -1712,10 +1715,10 @@ run_ready_tasks(void)
                                     key.type = TYPE_STR;
                                     key.v.str = str_dup("error");
                                     value = new_list(2);
-                                    value.v.list[1].type = TYPE_STR;
-                                    value.v.list[1].v.str = str_dup(http_errno_name((http_errno)tq->parsing_state->parser.http_errno));
-                                    value.v.list[2].type = TYPE_STR;
-                                    value.v.list[2].v.str = str_dup(http_errno_description((http_errno)tq->parsing_state->parser.http_errno));
+                                    value[1].type = TYPE_STR;
+                                    value[1].v.str = str_dup(http_errno_name((http_errno)tq->parsing_state->parser.http_errno));
+                                    value[2].type = TYPE_STR;
+                                    value[2].v.str = str_dup(http_errno_description((http_errno)tq->parsing_state->parser.http_errno));
                                     tq->parsing_state->result = mapinsert(tq->parsing_state->result, key, value);
                                     done = 1;
                                 }
@@ -1771,7 +1774,7 @@ run_ready_tasks(void)
                         forked_task ft;
                         ft = t->t.forked;
                         current_task_id = ft.id;
-                        current_local = new_map();
+                        current_local = new_map(0);
                         ft.a.threaded = DEFAULT_THREAD_MODE;
                         do_forked_task(ft.program, ft.rt_env, ft.a,
                                        ft.f_index);
@@ -1847,7 +1850,7 @@ run_server_task_setting_id(Objid player, Var what, const char *verb,
     db_verb_handle h;
 
     current_task_id = new_task_id();
-    current_local = new_map();
+    current_local = new_map(0);
 
     if (task_id)
         *task_id = current_task_id;
@@ -1875,7 +1878,7 @@ run_server_program_task(Objid _this, const char *verb, Var args, Objid vloc,
                         Var *result)
 {
     current_task_id = new_task_id();
-    current_local = new_map();
+    current_local = new_map(0);
 
     enum outcome ret = do_server_program_task(Var::new_obj(_this), verb, args, Var::new_obj(vloc), verbname, program,
                        progr, debug, player, argstr,
@@ -2225,7 +2228,7 @@ find_verb_for_programming(Objid player, const char *verbref,
 static package
 bf_queue_info(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    int nargs = arglist.v.list[0].v.num;
+    int nargs = arglist.length();
     Var res;
 
     if (nargs == 0) {
@@ -2239,13 +2242,13 @@ bf_queue_info(Var arglist, Byte next, void *vdata, Objid progr)
 
         res = new_list(count);
         for (tq = active_tqueues; tq; tq = tq->next) {
-            res.v.list[count].type = TYPE_OBJ;
-            res.v.list[count].v.obj = tq->player;
+            res[count].type = TYPE_OBJ;
+            res[count].v.obj = tq->player;
             count--;
         }
         for (tq = idle_tqueues; tq; tq = tq->next) {
-            res.v.list[count].type = TYPE_OBJ;
-            res.v.list[count].v.obj = tq->player;
+            res[count].type = TYPE_OBJ;
+            res[count].v.obj = tq->player;
             count--;
         }
     } else if (is_wizard(progr)) {
@@ -2264,14 +2267,14 @@ bf_queue_info(Var arglist, Byte next, void *vdata, Objid progr)
         static Var queue_parsing = str_dup_to_var("parsing");
         static Var queue_vm = str_dup_to_var("reading_task_id");
 
-        Objid who = arglist.v.list[1].v.obj;
+        Objid who = arglist[1].v.obj;
         tqueue *tq = find_tqueue(who, 0);
 
         if (!tq) {
             res.type = TYPE_INT;
             res.v.num = 0;
         } else {
-            res = new_map();
+            res = new_map(0);
             res = mapinsert(res, var_ref(queue_pname), Var::new_obj(tq->player));
             res = mapinsert(res, var_ref(queue_handler), Var::new_obj(tq->handler));
             res = mapinsert(res, var_ref(queue_connected), Var::new_bool(tq->connected));
@@ -2290,7 +2293,7 @@ bf_queue_info(Var arglist, Byte next, void *vdata, Objid progr)
         }
 
     } else {
-        Objid who = arglist.v.list[1].v.obj;
+        Objid who = arglist[1].v.obj;
         tqueue *tq = find_tqueue(who, 0);
 
         res.type = TYPE_INT;
@@ -2355,27 +2358,19 @@ list_for_forked_task(forked_task ft, Objid progr, int include_variables)
 
     list = new_list(include_variables ? 11 : 10);
 
-    list.v.list[1].type = TYPE_INT;
-    list.v.list[1].v.num = ft.id;
-    list.v.list[2].type = TYPE_INT;
-    list.v.list[2].v.num = ROUND(&ft.start_tv);
-    list.v.list[3].type = TYPE_INT;
-    list.v.list[3].v.num = 0;           /* OBSOLETE: was clock ID */
-    list.v.list[4].type = TYPE_INT;
-    list.v.list[4].v.num = DEFAULT_BG_TICKS;    /* OBSOLETE: was clock ticks */
-    list.v.list[5].type = TYPE_OBJ;
-    list.v.list[5].v.obj = ft.a.progr;
-    list.v.list[6] = anonymizing_var_ref(ft.a.vloc, progr);
-    list.v.list[7].type = TYPE_STR;
-    list.v.list[7].v.str = str_ref(ft.a.verbname);
-    list.v.list[8].type = TYPE_INT;
-    list.v.list[8].v.num = find_line_number(ft.program, ft.f_index, 0);
-    list.v.list[9] = anonymizing_var_ref(ft.a._this, progr);
-    list.v.list[10].type = TYPE_INT;
-    list.v.list[10].v.num = forked_task_bytes(ft);
+    list[1] = Var::new_int(ft.id);
+    list[2] = Var::new_int(ROUND(&ft.start_tv));
+    list[3] = Var::new_int(0);           /* OBSOLETE: was clock ID */
+    list[4] = Var::new_int(DEFAULT_BG_TICKS);    /* OBSOLETE: was clock ticks */
+    list[5] = Var::new_obj(ft.a.progr);
+    list[6] = anonymizing_var_ref(ft.a.vloc, progr);
+    list[7] = str_ref_to_var(ft.a.verbname);
+    list[8] = Var::new_int(find_line_number(ft.program, ft.f_index, 0));
+    list[9] = anonymizing_var_ref(ft.a._this, progr);
+    list[10] = Var::new_int(forked_task_bytes(ft));
 
     if (include_variables)
-        list.v.list[11] = make_rt_var_map(ft.a.rt_env, ft.a.prog->var_names, ft.a.prog->num_var_names);
+        list[11] = make_rt_var_map(ft.a.rt_env, ft.a.prog->var_names, ft.a.prog->num_var_names);
 
     return list;
 }
@@ -2399,27 +2394,20 @@ list_for_vm(vm the_vm, Objid progr, int include_variables)
 
     list = new_list(include_variables ? 11 : 10);
 
-    list.v.list[1].type = TYPE_INT;
-    list.v.list[1].v.num = the_vm->task_id;
+    list[1] = Var::new_int(the_vm->task_id);
 
-    list.v.list[3].type = TYPE_INT;
-    list.v.list[3].v.num = 0;           /* OBSOLETE: was clock ID */
-    list.v.list[4].type = TYPE_INT;
-    list.v.list[4].v.num = DEFAULT_BG_TICKS;    /* OBSOLETE: was clock ticks */
-    list.v.list[5].type = TYPE_OBJ;
-    list.v.list[5].v.obj = progr_of_cur_verb(the_vm);
-    list.v.list[6] = anonymizing_var_ref(top_activ(the_vm).vloc, progr);
-    list.v.list[7].type = TYPE_STR;
-    list.v.list[7].v.str = str_ref(top_activ(the_vm).verbname);
-    list.v.list[8].type = TYPE_INT;
-    list.v.list[8].v.num = suspended_lineno_of_vm(the_vm);
-    list.v.list[9] = anonymizing_var_ref(top_activ(the_vm)._this, progr);
-    list.v.list[10].type = TYPE_INT;
-    list.v.list[10].v.num = suspended_task_bytes(the_vm);
+    list[3]  = Var::new_int(0);           /* OBSOLETE: was clock ID */
+    list[4]  = Var::new_int(DEFAULT_BG_TICKS);    /* OBSOLETE: was clock ticks */
+    list[5]  = Var::new_obj(progr_of_cur_verb(the_vm));
+    list[6]  = anonymizing_var_ref(top_activ(the_vm).vloc, progr);
+    list[7]  = str_ref_to_var(top_activ(the_vm).verbname);
+    list[8]  = Var::new_int(suspended_lineno_of_vm(the_vm));
+    list[9]  = anonymizing_var_ref(top_activ(the_vm)._this, progr);
+    list[10] = Var::new_int(suspended_task_bytes(the_vm));
 
-    if (include_variables) {
-        list.v.list[11] = make_rt_var_map(top_activ(the_vm).rt_env, top_activ(the_vm).prog->var_names, top_activ(the_vm).prog->num_var_names);
-    }
+    if (include_variables)
+        list[11] = make_rt_var_map(top_activ(the_vm).rt_env, top_activ(the_vm).prog->var_names, top_activ(the_vm).prog->num_var_names);
+
     return list;
 }
 
@@ -2429,8 +2417,7 @@ list_for_suspended_task(suspended_task st, Objid progr, int include_variables)
     Var list;
 
     list = list_for_vm(st.the_vm, progr, include_variables);
-    list.v.list[2].type = TYPE_INT;
-    list.v.list[2].v.num = ROUND(&st.start_tv);
+    list[2] = Var::new_int(ROUND(&st.start_tv));
 
     return list;
 }
@@ -2441,10 +2428,8 @@ list_for_reading_task(Objid player, vm the_vm, Objid progr, int include_variable
     Var list;
 
     list = list_for_vm(the_vm, progr, include_variables);
-    list.v.list[2].type = TYPE_INT;
-    list.v.list[2].v.num = -1;  /* conventional value */
-
-    list.v.list[5].v.obj = player;
+    list[2] = Var::new_int(-1);  /* conventional value */
+    list[5] = Var::new_obj(player);
 
     return list;
 }
@@ -2468,9 +2453,8 @@ listing_closure(vm the_vm, const char *status, void *data)
 
     if (qdata->show_all || qdata->progr == progr_of_cur_verb(the_vm)) {
         list = list_for_vm(the_vm, qdata->progr, 0);
-        list.v.list[2].type = TYPE_STR;
-        list.v.list[2].v.str = str_dup(status);
-        qdata->tasks.v.list[qdata->i++] = list;
+        list[2] = str_dup_to_var(status);
+        qdata->tasks[qdata->i++] = list;
     }
 
     return TEA_CONTINUE;
@@ -2493,9 +2477,9 @@ static package
 bf_queued_tasks(Var arglist, Byte next, void *vdata, Objid progr)
 {
     Var tasks;
-    int nargs = arglist.v.list[0].v.num;
-    bool include_variables = (nargs == 1 && is_true(arglist.v.list[1]));
-    bool return_count = (nargs == 2 && is_true(arglist.v.list[2]));
+    int nargs = arglist.length();
+    bool include_variables = (nargs == 1 && is_true(arglist[1]));
+    bool return_count = (nargs == 2 && is_true(arglist[2]));
     bool show_all = is_wizard(progr);
     tqueue *tq;
     task *t;
@@ -2542,38 +2526,38 @@ bf_queued_tasks(Var arglist, Byte next, void *vdata, Objid progr)
 
         for (tq = idle_tqueues; tq; tq = tq->next) {
             if (tq->reading && (show_all || tq->player == progr))
-                tasks.v.list[i++] = list_for_reading_task(tq->player,
+                tasks[i++] = list_for_reading_task(tq->player,
                                     tq->reading_vm,
                                     progr, include_variables);
         }
 
         for (tq = active_tqueues; tq; tq = tq->next) {
             if (tq->reading && (show_all || tq->player == progr))
-                tasks.v.list[i++] = list_for_reading_task(tq->player,
+                tasks[i++] = list_for_reading_task(tq->player,
                                     tq->reading_vm,
                                     progr, include_variables);
 
             for (t = tq->first_bg; t; t = t->next)
                 if (t->kind == TASK_FORKED && (show_all
                                                || t->t.forked.a.progr == progr))
-                    tasks.v.list[i++] = list_for_forked_task(t->t.forked,
+                    tasks[i++] = list_for_forked_task(t->t.forked,
                                         progr, include_variables);
                 else if (t->kind == TASK_SUSPENDED
                          && (show_all
                              || progr_of_cur_verb(t->t.suspended.the_vm) == progr))
-                    tasks.v.list[i++] = list_for_suspended_task(t->t.suspended,
+                    tasks[i++] = list_for_suspended_task(t->t.suspended,
                                         progr, include_variables);
         }
 
         for (t = waiting_tasks; t; t = t->next) {
             if (t->kind == TASK_FORKED && (show_all ||
                                            t->t.forked.a.progr == progr))
-                tasks.v.list[i++] = list_for_forked_task(t->t.forked,
+                tasks[i++] = list_for_forked_task(t->t.forked,
                                     progr, include_variables);
             else if (t->kind == TASK_SUSPENDED
                      && (progr_of_cur_verb(t->t.suspended.the_vm) == progr
                          || show_all))
-                tasks.v.list[i++] = list_for_suspended_task(t->t.suspended,
+                tasks[i++] = list_for_suspended_task(t->t.suspended,
                                     progr, include_variables);
         }
 
@@ -2764,7 +2748,7 @@ kill_task(int id, Objid owner)
 static package
 bf_kill_task(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    int id = arglist.v.list[1].v.num;
+    int id = arglist[1].v.num;
     enum error e = kill_task(id, progr);
 
     free_var(arglist);
@@ -2825,12 +2809,12 @@ do_resume(int id, Var value, Objid progr)
 static package
 bf_resume(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    int nargs = arglist.v.list[0].v.num;
+    int nargs = arglist.length();
     Var value;
     enum error e;
 
-    value = (nargs >= 2 ? var_ref(arglist.v.list[2]) : zero);
-    e = do_resume(arglist.v.list[1].v.num, value, progr);
+    value = (nargs >= 2 ? var_ref(arglist[2]) : zero);
+    e = do_resume(arglist[1].v.num, value, progr);
     free_var(arglist);
     if (e != E_NONE) {
         free_var(value);
@@ -2843,7 +2827,7 @@ static package
 bf_output_delimiters(Var arglist, Byte next, void *vdata, Objid progr)
 {
     Var r;
-    Objid player = arglist.v.list[1].v.obj;
+    Objid player = arglist[1].v.obj;
 
     free_var(arglist);
 
@@ -2867,9 +2851,8 @@ bf_output_delimiters(Var arglist, Byte next, void *vdata, Objid progr)
             suffix = "";
 
         r = new_list(2);
-        r.v.list[1].type = r.v.list[2].type = TYPE_STR;
-        r.v.list[1].v.str = str_dup(prefix);
-        r.v.list[2].v.str = str_dup(suffix);
+        r[1] = str_dup_to_var(prefix);
+        r[2] = str_dup_to_var(suffix);
     }
     return make_var_pack(r);
 }
@@ -2877,10 +2860,10 @@ bf_output_delimiters(Var arglist, Byte next, void *vdata, Objid progr)
 static package
 bf_force_input(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (conn, string [, at_front]) */
-    Objid conn = arglist.v.list[1].v.obj;
-    const char *line = arglist.v.list[2].v.str;
-    int at_front = (arglist.v.list[0].v.num > 2
-                    && is_true(arglist.v.list[3]));
+    Objid conn = arglist[1].v.obj;
+    const char *line = arglist[2].v.str;
+    int at_front = (arglist.length() > 2
+                    && is_true(arglist[3]));
     tqueue *tq;
 
     if (!is_wizard(progr) && progr != conn) {
@@ -2896,9 +2879,9 @@ bf_force_input(Var arglist, Byte next, void *vdata, Objid progr)
 static package
 bf_flush_input(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (conn [, show_messages]) */
-    Objid conn = arglist.v.list[1].v.obj;
-    int show_messages = (arglist.v.list[0].v.num > 1
-                         && is_true(arglist.v.list[2]));
+    Objid conn = arglist[1].v.obj;
+    int show_messages = (arglist.length() > 1
+                         && is_true(arglist[2]));
     tqueue *tq;
 
     if (!is_wizard(progr) && progr != conn) {
@@ -2919,7 +2902,7 @@ bf_set_task_local(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    Var v = var_ref(arglist.v.list[1]);
+    Var v = var_ref(arglist[1]);
 
     free_var(current_local);
     current_local = v;
@@ -2947,9 +2930,9 @@ bf_task_local(Var arglist, Byte next, void *vdata, Objid progr)
 static package
 bf_switch_player(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    Objid old_player = arglist.v.list[1].v.obj;
-    Objid new_player = arglist.v.list[2].v.obj;
-    bool silent = arglist.v.list[0].v.num > 2 && is_true(arglist.v.list[3]);
+    Objid old_player = arglist[1].v.obj;
+    Objid new_player = arglist[2].v.obj;
+    bool silent = arglist.length() > 2 && is_true(arglist[3]);
 
     free_var(arglist);
 
@@ -3018,14 +3001,14 @@ bf_finished_tasks(Var arglist, Byte next, void *vdata, Objid progr)
 static package
 bf_set_thread_mode(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    if (arglist.v.list[0].v.num == 0) {
+    if (arglist.length() == 0) {
         Var ret;
         ret.type = TYPE_INT;
         ret.v.num = get_thread_mode();
         free_var(arglist);
         return make_var_pack(ret);
     } else {
-        set_thread_mode(is_true(arglist.v.list[1]));
+        set_thread_mode(is_true(arglist[1]));
         free_var(arglist);
         return no_var_pack();
     }
@@ -3040,16 +3023,13 @@ register_tasks(void)
     register_function("finished_tasks", 0, 0, bf_finished_tasks);
 #endif
     register_function("kill_task", 1, 1, bf_kill_task, TYPE_INT);
-    register_function("output_delimiters", 1, 1, bf_output_delimiters,
-                      TYPE_OBJ);
+    register_function("output_delimiters", 1, 1, bf_output_delimiters, TYPE_OBJ);
     register_function("queue_info", 0, 1, bf_queue_info, TYPE_OBJ);
     register_function("resume", 1, 2, bf_resume, TYPE_INT, TYPE_ANY);
-    register_function("force_input", 2, 3, bf_force_input,
-                      TYPE_OBJ, TYPE_STR, TYPE_ANY);
+    register_function("force_input", 2, 3, bf_force_input, TYPE_OBJ, TYPE_STR, TYPE_ANY);
     register_function("flush_input", 1, 2, bf_flush_input, TYPE_OBJ, TYPE_ANY);
     register_function("set_task_local", 1, 1, bf_set_task_local, TYPE_ANY);
     register_function("task_local", 0, 0, bf_task_local);
-    register_function("switch_player", 2, 3, bf_switch_player,
-                      TYPE_OBJ, TYPE_OBJ, TYPE_INT);
+    register_function("switch_player", 2, 3, bf_switch_player, TYPE_OBJ, TYPE_OBJ, TYPE_INT);
     register_function("set_thread_mode", 0, 1, bf_set_thread_mode, TYPE_INT);
 }

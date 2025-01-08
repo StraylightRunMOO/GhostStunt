@@ -2,6 +2,7 @@
 
 #ifdef ARGON2_FOUND
 
+#include <cstring>
 #include <argon2.h>
 
 #include "functions.h"
@@ -10,18 +11,18 @@
 #include "map.h"
 #include "background.h"
 
-static void argon2_thread_callback(Var arglist, Var *r)
+static void argon2_thread_callback(Var arglist, Var *r, void *extra_data)
 {
-    const int nargs = arglist.v.list[0].v.num;
+    const int nargs = arglist.length();
 
     // password, salt, iterations, memory, parallelism
-    const char *str = arglist.v.list[1].v.str;
-    const char *salt = arglist.v.list[2].v.str;
+    const char *str = arglist[1].v.str;
+    const char *salt = arglist[2].v.str;
     const uint32_t outlen = 32;                                              // Hash output length.
     const argon2_type type = Argon2_id;
-    const uint32_t t_cost = nargs >= 3 ? arglist.v.list[3].v.num : 3;        // Iterations
-    const uint32_t m_cost = nargs >= 4 ? arglist.v.list[4].v.num : 4096;     // Memory usage (kb)
-    const uint32_t parallelism = nargs >= 5 ? arglist.v.list[5].v.num : 1;   // Number of threads
+    const uint32_t t_cost = nargs >= 3 ? arglist[3].v.num : 3;        // Iterations
+    const uint32_t m_cost = nargs >= 4 ? arglist[4].v.num : 4096;     // Memory usage (kb)
+    const uint32_t parallelism = nargs >= 5 ? arglist[5].v.num : 1;   // Number of threads
     const size_t saltlen = strlen(salt);
     const size_t len = strlen(str);
 
@@ -60,23 +61,20 @@ bf_argon2(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
 #ifdef THREAD_ARGON2
-    char *human_string = nullptr;
-    asprintf(&human_string, "argon2");
-
-    return background_thread(argon2_thread_callback, &arglist, human_string);
+    return background_thread(argon2_thread_callback, &arglist);
 #else
     Var ret;
-    argon2_thread_callback(arglist, &ret);
+    argon2_thread_callback(arglist, &ret, nullptr);
 
     free_var(arglist);
     return make_var_pack(ret);
 #endif
 }
 
-static void argon2_verify_thread_callback(Var arglist, Var *r)
+static void argon2_verify_thread_callback(Var arglist, Var *r, void *extra_data)
 {
-    const char *encoded = arglist.v.list[1].v.str;
-    const char *str = arglist.v.list[2].v.str;
+    const char *encoded = arglist[1].v.str;
+    const char *str = arglist[2].v.str;
     const size_t len = strlen(str);
 
     int result = argon2_verify(encoded, str, len, Argon2_id);
@@ -98,13 +96,10 @@ bf_argon2_verify(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
 #ifdef THREAD_ARGON2
-    char *human_string = nullptr;
-    asprintf(&human_string, "argon2_verify");
-
-    return background_thread(argon2_verify_thread_callback, &arglist, human_string);
+    return background_thread(argon2_verify_thread_callback, &arglist);
 #else
     Var ret;
-    argon2_verify_thread_callback(arglist, &ret);
+    argon2_verify_thread_callback(arglist, &ret, nullptr);
 
     free_var(arglist);
     return make_var_pack(ret);

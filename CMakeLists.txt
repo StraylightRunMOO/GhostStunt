@@ -1,16 +1,25 @@
-cmake_minimum_required(VERSION 3.2)
-set(VERSION_MAJOR   6)
-set(VERSION_MINOR   6)
+cmake_minimum_required(VERSION 3.5)
+set(VERSION_MAJOR 6)
+set(VERSION_MINOR 6)
 set(VERSION_RELEASE 6)
-set(VERSION_EXT "")
+set(VERSION_EXT "_alpha")
 project(GhostStunt VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_RELEASE} LANGUAGES CXX C)
+
+# Compile Options
+option(ONLY_32_BITS "Use 32-bit integers instead of 64-bit." OFF)
+option(USE_JEMALLOC "Use jemalloc (if available) for memory allocation." OFF)
+
+# Fall back to 32-bit mode if the target doesn't support 64-bit
+if( CMAKE_SIZEOF_VOID_P EQUAL 4 )
+    set(ONLY_32_BITS true)
+endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMakeModules/")
 
 # Don't bother if we don't have these
-#find_package(BISON REQUIRED)
-#find_package(gperf REQUIRED)
+find_package(BISON REQUIRED)
 find_package(Perl REQUIRED)
+find_package(gperf REQUIRED)
 
 # (is there a better way to detect Apple Silicon?)
 EXECUTE_PROCESS( COMMAND uname -m COMMAND tr -d '\n' OUTPUT_VARIABLE ARCHITECTURE )
@@ -43,14 +52,6 @@ else()
     endif()
 endif()
 
-# Compile Options
-option(ONLY_32_BITS "Use 32-bit integers instead of 64-bit." OFF)
-
-# Fall back to 32-bit mode if the target doesn't support 64-bit
-if( CMAKE_SIZEOF_VOID_P EQUAL 4 )
-    set(ONLY_32_BITS true)
-endif()
-
 # Compiler Flags
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 99)
@@ -78,7 +79,9 @@ if(CMAKE_BUILD_TYPE MATCHES "LeakCheck")
     set(EXTRA_LINKER_FLAGS "-fsanitize=address")
 endif()
 
-string(TOUPPER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_UPPER)
+if(CMAKE_BUILD_TYPE)
+  string(TOUPPER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_UPPER)
+endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE_UPPER}}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${CMAKE_BUILD_TYPE_UPPER}}")
 
@@ -118,14 +121,14 @@ else()
 endif()
 
 # Yacc (-d is a default flag on my bison)
-#bison_target(MOOParser src/parser.y ${CMAKE_BINARY_DIR}/parser.cc COMPILE_FLAGS "-y")
+bison_target(MOOParser src/parser.y ${CMAKE_BINARY_DIR}/parser.cc COMPILE_FLAGS "-y")
 
 # Keywords.cc
-#set(KEYWORDS ${CMAKE_BINARY_DIR}/keywords.cc)
-#add_custom_command(
-#    OUTPUT ${KEYWORDS}
-#    COMMAND ${gperf_EXECUTABLE} --language=C++ --ignore-case --readonly-tables --struct-type --omit-struct-type --key-positions=1,3,$$ ${CMAKE_SOURCE_DIR}/src/keywords.gperf  > ${CMAKE_BINARY_DIR}/keywords.cc
-#    COMMENT "Generating keywords.cc")
+set(KEYWORDS ${CMAKE_BINARY_DIR}/keywords.cc)
+add_custom_command(
+    OUTPUT ${KEYWORDS}
+    COMMAND ${gperf_EXECUTABLE} --language=C++ --ignore-case --readonly-tables --struct-type --omit-struct-type --key-positions=1,3,$$ ${CMAKE_SOURCE_DIR}/src/keywords.gperf  > ${CMAKE_BINARY_DIR}/keywords.cc
+    COMMENT "Generating keywords.cc")
 
 # version_options.h
 execute_process(COMMAND ${PERL_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/include/version_opt_gen.pl)
@@ -142,15 +145,15 @@ add_custom_command(
 # Find packages. We don't do anything with the information yet because we need to know if things exist
 #                to modify the source files, so we have to do it before moo is defined. But we can't
 #                do the package setup UNTIL moo is defined.
-IF(APPLE_SILICON_FOUND)
+if(APPLE_SILICON_FOUND)
     set(CMAKE_THREAD_LIBS_INIT "-lpthread")
     set(CMAKE_HAVE_THREADS_LIBRARY 1)
     set(CMAKE_USE_WIN32_THREADS_INIT 0)
     set(CMAKE_USE_PTHREADS_INIT 1)
     set(THREADS_PREFER_PTHREAD_FLAG ON)
-ELSE()
+else()
     find_package(Threads REQUIRED)
-ENDIF()
+endif()
 find_package(Nettle REQUIRED)
 find_package(Argon2 REQUIRED)
 find_package(PCRE)
@@ -159,15 +162,25 @@ find_package(ASPELL)
 find_package(SQLite3)
 find_package(OpenSSL)
 
+if(USE_JEMALLOC)
+    find_library(JEMALLOC_LIBRARY NAMES jemalloc)
+    if(NOT JEMALLOC_LIBRARY)
+        message(WARNING "jemalloc library not found. Not using.")
+    else()
+        set(JEMALLOC_FOUND 1)
+    endif()
+endif()
+
 # Millions of source files
 set(src_CSRCS
-    src/dependencies/thpool.c
-    src/dependencies/sosemanuk.c
-    src/dependencies/linenoise.c
-    src/dependencies/rpmalloc.c
-    src/dependencies/strnatcmp.c
+    src/dependencies/hashmap.c
     src/http_parser.c
-    src/regexpr.c)
+    src/dependencies/linenoise.c
+    src/regexpr.c
+    src/dependencies/rpmalloc/rpmalloc.c
+    src/dependencies/sosemanuk.c
+    src/dependencies/strnatcmp.c
+    src/dependencies/xxhash.c)
 
 if(PCRE_FOUND)
     list(APPEND src_CSRCS src/dependencies/pcrs.c)
@@ -209,7 +222,7 @@ set(src_CXXSRCS
     src/functions.cc
     src/garbage.cc
     src/json.cc
-    src/keywords.cc
+    ${KEYWORDS}
     src/log.cc
     src/list.cc
     src/map.cc
@@ -223,6 +236,8 @@ set(src_CXXSRCS
     src/program.cc
     src/property.cc
     src/quota.cc
+    src/structures.cc
+    src/set.cc
     src/server.cc
     src/storage.cc
     src/streams.cc
@@ -242,10 +257,11 @@ set(src_CXXSRCS
     src/simplexnoise.cc
     src/argon2.cc
     src/spellcheck.cc
-    src/curl.cc)
+    src/curl.cc
+    src/dependencies/thpool.cc)
 
 set(src_GRAMMAR
-    src/parser.cc)
+    ${BISON_MOOParser_OUTPUTS})
 
 set(src_SERVER
     ${VERSION_SRC}
@@ -256,7 +272,6 @@ set(src_SERVER
     ${src_CXXSRCS})
 
 add_executable(moo ${src_SERVER})
-target_link_libraries(moo -ldl)
 
 # Make sure we have the packages we need
 include_directories(${NETTLE_INCLUDE_DIRS})
@@ -296,6 +311,11 @@ if(OPENSSL_FOUND)
     target_link_libraries(moo ${OPENSSL_LIBRARIES})
 endif()
 
+if(JEMALLOC_FOUND)
+    include_directories(${JEMALLOC_INCLUDE_DIRS})
+    target_link_libraries(moo ${JEMALLOC_LIBRARY})
+endif()
+
 # Setup #defines as needed
 CONFIGURE_FILE(${CMAKE_SOURCE_DIR}/src/include/config.h.cmake
     ${CMAKE_BINARY_DIR}/config.h)
@@ -310,3 +330,6 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C flags: ${CMAKE_C_FLAGS}")
 message(STATUS "CXX flags: ${CMAKE_CXX_FLAGS}")
+if(JEMALLOC_FOUND)
+    message(STATUS "Using jemalloc")
+endif()

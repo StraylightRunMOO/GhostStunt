@@ -103,7 +103,12 @@ enum Expr_Kind {
     EXPR_FIRST, EXPR_LAST,
     EXPR_BITOR, EXPR_BITAND, EXPR_BITXOR,
     EXPR_BITSHL, EXPR_BITSHR, EXPR_COMPLEMENT,
-    SizeOf_Expr_Kind        /* The last element is also the number of elements... */
+
+    EXPR_CALL_HANDLE,
+    EXPR_MATRIX,
+    EXPR_COMPLEX,
+
+    SizeOf_Expr_Kind		/* The last element is also the number of elements... */
 };
 
 union Expr_Data {
@@ -111,6 +116,7 @@ union Expr_Data {
     int id;
     struct Expr_Binary bin;
     struct Expr_Call call;
+    struct Expr_Verb handle;
     struct Expr_Verb verb;
     struct Expr_Range range;
     struct Expr_Cond cond;
@@ -214,6 +220,7 @@ extern Expr *alloc_expr(enum Expr_Kind);
 extern Expr *alloc_var(var_type);
 extern Expr *alloc_binary(enum Expr_Kind, Expr *, Expr *);
 extern Expr *alloc_verb(Expr *, Expr *, Arg_List *);
+extern Expr *alloc_call_handle(Expr *, Expr *);
 extern Map_List * alloc_map_list(Expr * key, Expr * value);
 extern Arg_List *alloc_arg_list(enum Arg_Kind, Expr *);
 extern Except_Arm *alloc_except(int, Arg_List *, Stmt *);
@@ -224,4 +231,4 @@ extern void dealloc_node(void *);
 extern void dealloc_string(char *);
 extern void free_stmt(Stmt *);
 
-#endif              /* !AST_h */
+#endif				/* !AST_h */

@@ -16,15 +16,16 @@
  *****************************************************************************/
 
 #ifndef EXT_LIST_H
-#  define EXT_LIST_H 1
+#define EXT_LIST_H 1
 
-#  include <vector>
+#include <functional>
+#include <random>
 
-#  include "streams.h"
-#  include "structures.h"
+#include "structures.h"
+#include "streams.h"
 
 extern Var new_list(int size);
-extern void destroy_list(Var list);
+extern bool destroy_list(Var list);
 extern Var list_dup(Var list);
 
 extern Var listappend(Var list, Var value);
@@ -37,25 +38,40 @@ extern Var setadd(Var list, Var value);
 extern Var setremove(Var list, Var value);
 extern Var sublist(Var list, int lower, int upper);
 extern int listequal(Var lhs, Var rhs, int case_matters);
-
 extern int list_sizeof(Var *list);
 
-typedef int (*listfunc)(Var value, void *data, int first);
-extern int listforeach(Var list, listfunc func, void *data);
+typedef std::function<int(Var, int)> list_callback;
+extern int listforeach(Var list, list_callback func);
+
+extern Var set_intersection(Var s1, Var s2, bool count_dup);
 
 extern Var strrangeset(Var list, int from, int to, Var value);
 extern Var substr(Var str, int lower, int upper);
 extern Var strget(Var str, int i);
 
+extern Var corified_as(Var, int);
+
 extern const char *value2str(Var);
 extern void unparse_value(Stream *, Var);
+extern std::string toliteral(Var);
+
+extern const char* str_escape(const char*, int);
+extern const char* str_unescape(const char*, int);
+
+extern Var explode(Var s, char delim, bool mode);
+extern Var implode(Var src, Var sep);
+
+extern Var uppercase(Var s);
+extern Var lowercase(Var s);
 
 /*
  * Returns the length of the given list `l'.  Does *not* check to
  * ensure `l' is, in fact, a list.
  */
-static inline Num listlength(Var l) {
-  return l.v.list[0].v.num;
+static inline Num
+listlength(Var l)
+{
+    return l.length();
 }
 
 /*
@@ -65,13 +81,14 @@ static inline Num listlength(Var l) {
  * be either an object reference (TYPE_OBJ) or a list of object
  * references (TYPE_LIST).
  */
-static inline Var enlist_var(Var v) {
-  if (TYPE_LIST == v.type)
-    return v;
+static inline Var
+enlist_var(Var v)
+{
+    if (TYPE_LIST == v.type) return v;
 
-  Var r = new_list(1);
-  r.v.list[1] = v;
-  return r;
+    Var r = new_list(1);
+    r[1] = v;
+    return r;
 }
 
 /*
@@ -86,30 +103,15 @@ static inline Var enlist_var(Var v) {
  *       printf("%d of %d, item = %s\n", i, c, value_to_literal(item));
  *   }
  */
-#  define FOR_EACH(val, lst, idx, cnt) for (idx = 1, cnt = lst.v.list[0].v.num; idx <= cnt && (val = lst.v.list[idx], 1); idx++)
+#define FOR_EACH(val, lst, idx, cnt)				\
+for (idx = 1, cnt = lst.length();			\
+     idx <= cnt && (val = lst[idx], 1);			\
+     idx++)
 
 /*
  * Pop the first value off `stck' and put it in `tp'.
  */
-#  define POP_TOP(tp, stck)                                                                                                                                   \
-    tp = var_ref(stck.v.list[1]);                                                                                                                             \
-    stck = listdelete(stck, 1);
+#define POP_TOP(tp, stck)					\
+tp = var_ref(stck[1]);					\
+stck = listdelete(stck, 1);
 #endif
-
-static inline std::vector<Var> list_to_vector(Var list) {
-  std::vector<Var> vec;
-  vec.reserve(list.v.list[0].v.num);
-
-  for (auto i = 1; i <= list.v.list[0].v.num; i++) vec.emplace_back(list.v.list[i]);
-
-  return vec;
-}
-
-static inline Var vector_to_list(std::vector<Var> vec) {
-  auto sz = vec.size();
-  Var ret = new_list(sz);
-
-  for (auto i = 1; i <= sz; i++) ret.v.list[i] = vec[i - 1];
-
-  return ret;
-}

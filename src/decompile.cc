@@ -17,6 +17,7 @@
 
 #include "ast.h"
 #include "decompile.h"
+#include "log.h"
 #include "opcode.h"
 #include "program.h"
 #include "server.h"
@@ -427,7 +428,7 @@ finish_binary:
                 /* Ignore; following RANGESET or INDEXSET does the work */
                 if (op_hot)
                     asgn_hot = 1;
-            break;
+                break;
             case OP_INDEXSET:
                 /* Most of the lvalue has already been constructed on the stack.
                  * Add the final indexing.
@@ -521,6 +522,7 @@ finish_indexed_assignment:
                                          : ARG_NORMAL, e);
                 push_expr((Expr *)HOT_OP1(e, list));
             }
+
             break;
             case OP_PUSH_TEMP:
             case OP_JUMP:
@@ -531,6 +533,12 @@ finish_indexed_assignment:
                 Extended_Opcode eop = (Extended_Opcode)(*ptr++);
 
                 switch (eop) {
+                case EOP_CALL_HANDLE:
+                    {
+                        e = alloc_call_handle(pop_expr(), pop_expr());
+                        push_expr((Expr *)HOT_OP(e));
+                    }
+                    break;
                     case EOP_RANGESET:
                         /* Most of the lvalue has already been constructed on the
                          * stack.  Add the final subranging.
@@ -625,10 +633,9 @@ finish_indexed_assignment:
                         e->e.var.v.num = READ_LABEL();
                         push_expr((Expr *)HOT_OP(e));
                         break;
-                    case EOP_BI_FUNC_CALL:
+                   case EOP_BI_FUNC_CALL:
                     {
                         Expr *a = pop_expr();
-
                         if (a->kind != EXPR_LIST)
                             panic_moo("Missing arglist for BI_FUNC_CALL in DECOMPILE!");
                         e = alloc_expr(EXPR_CALL);

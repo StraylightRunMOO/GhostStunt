@@ -34,6 +34,8 @@
 #include <string.h>         /* memcpy() */
 #include <unistd.h>         /* close() */
 #include <netinet/tcp.h>
+#include <atomic>
+#include <vector>
 
 #include "options.h"
 #include "config.h"
@@ -46,7 +48,6 @@
 #include "timers.h"
 #include "utils.h"
 #include "map.h"
-#include <atomic>
 
 static struct proto proto;
 static int eol_length;      /* == strlen(proto.eol_out_string) */
@@ -72,33 +73,37 @@ SSL_CTX *tls_ctx;
 
 typedef struct text_block {
     struct text_block *next;
-    int length;
     char *buffer;
     char *start;
+    int length;
 } text_block;
 
 typedef struct nhandle {
     struct nhandle *next, **prev;
     server_handle shandle;
-    int rfd, wfd;
     const char *name;                       // resolved hostname (or IP if DNS is disabled)
     Stream *input;
-    bool last_input_was_CR;
-    bool input_suspended;
     text_block *output_head;
     text_block **output_tail;
-    int output_length;
-    int output_lines_flushed;
-    bool outbound, binary;
-    bool client_echo;
-    uint16_t source_port;                   // port on server
     const char *source_address;             // interface on server (resolved hostname)
     const char *source_ipaddr;              // interface on server (IP address)
-    uint16_t destination_port;              // local port on connectee
     const char *destination_ipaddr;         // IP address of connection
-    sa_family_t protocol_family;            // AF_INET, AF_INET6
     pthread_mutex_t *name_mutex;
-    std::atomic_uint refcount;
+    std::atomic<uint32_t> refcount;
+    int rfd, wfd;
+    int output_length;
+    int output_lines_flushed;
+    uint16_t source_port;                   // port on server
+    uint16_t destination_port;              // local port on connectee
+    uint16_t keep_alive_idle;
+    uint16_t keep_alive_interval;
+    uint8_t keep_alive_count;
+    sa_family_t protocol_family;            // AF_INET, AF_INET6
+    bool last_input_was_CR;
+    bool input_suspended;
+    bool outbound, binary;
+    bool client_echo;
+    bool keep_alive;
 #ifdef USE_TLS
     SSL *tls;                               // TLS context; not TLS if null
     bool connected;
@@ -111,24 +116,26 @@ static nhandle *all_nhandles = nullptr;
 typedef struct nlistener {
     struct nlistener *next, **prev;
     server_listener slistener;
-    int fd;
     const char *name;                       // resolved hostname
     const char *ip_addr;                    // 'raw' IP address
+#ifdef USE_TLS
+    const char *tls_certificate_path;
+    const char *tls_key_path;
+#endif
+    int fd;
     uint16_t port;                          // listening port
 #ifdef USE_TLS
     bool use_tls;
-    const char *tls_certificate_path;
-    const char *tls_key_path;
 #endif
 } nlistener;
 
 static nlistener *all_nlisteners = nullptr;
 
 typedef struct {
-    int fd;
+    void *data;
     network_fd_callback readable;
     network_fd_callback writable;
-    void *data;
+    int fd;
 } fd_reg;
 
 static fd_reg *reg_fds = nullptr;
@@ -279,8 +286,12 @@ push_network_buffer_overflow(nhandle *h)
         int error = SSL_get_error(h->tls, count);
         if (error == SSL_ERROR_WANT_WRITE || error == SSL_ERROR_WANT_READ || errno == eagain || errno == ewouldblock)
             h->want_write = true;
-        else
+        else {
+            pthread_mutex_lock(h->name_mutex);
             errlog("TLS: Error pushing output (error %i) (errno %i) from %s: %s\n", error, errno, h->name, ERR_error_string(ERR_get_error(), nullptr));
+            pthread_mutex_unlock(h->name_mutex);
+        }
+
         ERR_clear_error();
         return count > 0 || error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE || errno == eagain || errno == ewouldblock;
     }
@@ -323,8 +334,11 @@ push_output(nhandle * h)
                 int error = SSL_get_error(h->tls, count);
                 if (error == SSL_ERROR_WANT_WRITE || error == SSL_ERROR_WANT_READ || errno == eagain || errno == ewouldblock)
                     h->want_write = true;
-                else
+                else {
+                    pthread_mutex_lock(h->name_mutex);
                     errlog("TLS: Error pushing output (error %i) (errno %i) from %s: %s\n", error, errno, h->name, ERR_error_string(ERR_get_error(), nullptr));
+                    pthread_mutex_unlock(h->name_mutex);
+                }
                 ERR_clear_error();
                 return (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE || errno == eagain || errno == ewouldblock);
             }
@@ -396,12 +410,17 @@ pull_input(nhandle * h)
                 case SSL_ERROR_NONE:
                     h->connected = true;
                     break;
-                default:
+                default: {
+                    pthread_mutex_lock(h->name_mutex);
                     errlog("TLS: Accept failed (%i) from %s: %s\n", error, h->name, ERR_error_string(ERR_get_error(), nullptr));
+                    pthread_mutex_unlock(h->name_mutex);
                     return 0;
+                }
             }
 #ifdef LOG_TLS_CONNECTIONS
+            pthread_mutex_lock(h->name_mutex);
             oklog("TLS: %s for %s. Cipher: %s\n", SSL_state_string_long(h->tls), h->name, SSL_get_cipher(h->tls));
+            pthread_mutex_unlock(h->name_mutex);
 #endif
             return 1;
         } else {
@@ -420,9 +439,12 @@ pull_input(nhandle * h)
                     case SSL_ERROR_ZERO_RETURN:
                         return 0;
                         break;
-                    default:
+                    default: {
+                        pthread_mutex_lock(h->name_mutex);
                         errlog("TLS: Error pulling input (%i) from %s: %s\n", error, h->name, ERR_error_string(ERR_get_error(), nullptr));
+                        pthread_mutex_unlock(h->name_mutex);
                         return 0;
+                    }
                 }
             }
         }
@@ -446,7 +468,7 @@ pull_input(nhandle * h)
                 else if (c == 0x08 || c == 0x7F)
                     stream_delete_char(s);
 #endif
-                else if (c == TN_IAC && ptr + 2 <= end) {
+                else if (c == TN_IAC && ptr + 2 < end) {
                     // Pluck a telnet IAC sequence out of the middle of the input
                     int telnet_counter = 1;
                     unsigned char cmd = *(ptr + telnet_counter);
@@ -454,7 +476,7 @@ pull_input(nhandle * h)
                         stream_add_raw_bytes_to_binary(oob, ptr, 3);
                         ptr += 2;
                     } else {
-                        while (cmd != TN_SE && ptr + telnet_counter <= end)
+                        while (cmd != TN_SE && ptr + telnet_counter < end)
                             cmd = *(ptr + telnet_counter++);
 
                         if (cmd == TN_SE) {
@@ -534,11 +556,21 @@ new_nhandle(const int rfd, const int wfd, const bool outbound, uint16_t listen_p
     h->name_mutex = (pthread_mutex_t *) malloc(sizeof(pthread_mutex_t));
     pthread_mutex_init(h->name_mutex, nullptr);
     h->refcount = 1;
+    h->keep_alive = KEEP_ALIVE_DEFAULT;
+    h->keep_alive_count = KEEP_ALIVE_COUNT;
+    h->keep_alive_idle = KEEP_ALIVE_IDLE;
+    h->keep_alive_interval = KEEP_ALIVE_INTERVAL;
 #ifdef USE_TLS
     h->tls = tls;
     h->connected = false;
     h->want_write = false;
 #endif
+
+    if (h->keep_alive) {
+        network_handle nh;
+        nh.ptr = h;
+        network_set_client_keep_alive(nh, Var::new_int(1));
+    }
 
     return h;
 }
@@ -769,11 +801,12 @@ network_accept_connection(int listener_fd, int *read_fd, int *write_fd,
 
 enum error
 make_listener(Var desc, int *fd, const char **name, const char **ip_address,
-              uint16_t *port, const bool use_ipv6)
+              uint16_t *port, const bool use_ipv6, const char *interface)
 {
     int s, yes = 1;
     struct addrinfo hints;
     struct addrinfo * servinfo, *p;
+    const char *default_interface = use_ipv6 ? bind_ipv6 : bind_ipv4;
 
     if (desc.type != TYPE_INT)
         return E_TYPE;
@@ -784,7 +817,7 @@ make_listener(Var desc, int *fd, const char **name, const char **ip_address,
     hints.ai_flags = AI_PASSIVE;        // use all the IPs
 
     char *port_string = get_port_str(desc.v.num);
-    int rv = getaddrinfo(use_ipv6 ? bind_ipv6 : bind_ipv4, port_string, &hints, &servinfo);
+    int rv = getaddrinfo(interface ? interface : default_interface, port_string, &hints, &servinfo);
     free(port_string);
     if (rv != 0) {
         log_perror(gai_strerror(rv));
@@ -952,7 +985,7 @@ timeout_proc(Timer_ID id, Timer_Data data)
     throw timeout_exception();
 }
 
-enum error
+package
 open_connection(Var arglist, int *read_fd, int *write_fd,
                 const char **name, const char **ip_addr,
                 uint16_t *port, sa_family_t *protocol,
@@ -962,18 +995,21 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
     int s, result;
     struct addrinfo * servinfo, *p, hint;
     int yes = 1;
+#ifdef USE_TLS
+    char *tls_error_msg;
+#endif
 
     if (!outbound_network_enabled)
-        return E_PERM;
+        return make_raise_pack(E_PERM, "Outbound network connections are disabled.", zero);
 
-    if (arglist.v.list[0].v.num < 2)
-        return E_ARGS;
-    else if (arglist.v.list[1].type != TYPE_STR ||
-             arglist.v.list[2].type != TYPE_INT)
-        return E_TYPE;
+    if (arglist.length() < 2)
+        return make_error_pack(E_ARGS);
+    else if (arglist[1].type != TYPE_STR ||
+             arglist[2].type != TYPE_INT)
+        return make_error_pack(E_TYPE);
 
-    const char *host_name = arglist.v.list[1].v.str;
-    int host_port = arglist.v.list[2].v.num;
+    const char *host_name = arglist[1].v.str;
+    int host_port = arglist[2].v.num;
 
     memset(&hint, 0, sizeof hint);
     hint.ai_family = use_ipv6 ? AF_INET6 : AF_INET;
@@ -985,7 +1021,7 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
     free(port_string);
     if (rv != 0) {
         errlog("open_connection getaddrinfo error: %s\n", gai_strerror(rv));
-        return E_INVARG;
+        return make_raise_pack(E_INVARG, "getaddrinfo error", str_dup_to_var(gai_strerror(rv)));
     }
 
     /* If we have multiple results, we'll bind to the first one we can. */
@@ -1000,7 +1036,7 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
             log_perror("Error setting listening socket options");
             close(s);
             freeaddrinfo(servinfo);
-            return E_QUOTA;
+            return make_raise_pack(E_QUOTA, "Error setting listening socket options", zero);
         }
 
         break;
@@ -1013,7 +1049,7 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
         if (errno == EACCES)
             e = E_PERM;
         freeaddrinfo(servinfo);
-        return e;
+        return make_raise_pack(e, "Failed to bind to listening socket", str_dup_to_var(strerror(errno)));
     }
 
     try {
@@ -1032,13 +1068,15 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
             } else {
                 SSL_set_fd(*tls, s);
                 SSL_set_connect_state(*tls);
+                SSL_set_tlsext_host_name(*tls, host_name);
                 int tls_success = SSL_connect(*tls);
                 if (tls_success <= 0) {
                     SSL_get_error(*tls, tls_success);
-                    errlog("TLS: Connect failed: %s\n", ERR_error_string(ERR_get_error(), nullptr));
+                    tls_error_msg = ERR_error_string(ERR_get_error(), nullptr);
+                    ERR_clear_error();
+                    errlog("TLS: Connect failed: %s\n", tls_error_msg);
                     result = -1;
                     errno = TLS_CONNECT_FAIL;
-                    ERR_clear_error();
                 } else {
 #ifdef LOG_TLS_CONNECTIONS
                     oklog("TLS: %s. Cipher: %s\n", SSL_state_string_long(*tls), SSL_get_cipher(*tls));
@@ -1063,21 +1101,22 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
                 errno == ENETUNREACH ||
                 errno == ETIMEDOUT) {
             log_perror("open_network_connection error");
-            return E_INVARG;
+            return make_raise_pack(E_INVARG, "Connection failure", str_dup_to_var(strerror(errno)));
 #ifdef USE_TLS
         } else if (errno == TLS_FAIL) {
-            return E_INVARG;
+            return make_raise_pack(E_INVARG, "Error creating TLS context", zero);
         } else if (errno == TLS_CONNECT_FAIL) {
             if (*tls) {
                 SSL_shutdown(*tls);
                 SSL_free(*tls);
             }
-            return E_INVARG;
+            package ret = make_raise_pack(E_INVARG, "TLS connection failed", str_dup_to_var(tls_error_msg));
+            return ret;
 #endif
         }
 
         log_perror("Connecting in open_connection");
-        return E_QUOTA;
+        return make_raise_pack(E_QUOTA, "Connection failure", str_dup_to_var(strerror(errno)));
     }
 
     *read_fd = *write_fd = s;
@@ -1093,7 +1132,7 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
 
     freeaddrinfo(servinfo);
 
-    return E_NONE;
+    return make_error_pack(E_NONE);
 }
 #endif              /* OUTBOUND_NETWORK */
 
@@ -1119,7 +1158,7 @@ tcp_arguments(int argc, char **argv, uint16_t *pport)
  *************************/
 
 int
-network_initialize(int argc, char **argv, Var * desc)
+network_initialize(int argc, char **argv, Var *desc)
 {
     uint16_t port = 0;
 
@@ -1186,10 +1225,11 @@ network_initialize(int argc, char **argv, Var * desc)
 enum error
 network_make_listener(server_listener sl, Var desc, network_listener * nl,
                       const char **name, const char **ip_address,
-                      uint16_t *port, bool use_ipv6 USE_TLS_BOOL_DEF TLS_CERT_PATH_DEF)
+                      uint16_t *port, bool use_ipv6, const char *interface 
+                      USE_TLS_BOOL_DEF TLS_CERT_PATH_DEF)
 {
     int fd;
-    enum error e = make_listener(desc, &fd, name, ip_address, port, use_ipv6);
+    enum error e = make_listener(desc, &fd, name, ip_address, port, use_ipv6, interface);
     nlistener *listener;
 
     if (e == E_NONE) {
@@ -1266,9 +1306,8 @@ enqueue_output(network_handle nh, const char *line, int line_length, int add_eol
             next = b->next;
             if (move_output_head)
                 h->output_head = next;
-            else {
+            else
                 h->output_head->next = next;
-            }
             free_text_block(b);
         }
         if (h->output_head == nullptr)
@@ -1343,8 +1382,10 @@ network_process_io(int timeout)
         {
             mplex_add_reader(h->rfd);
 #ifdef USE_TLS
-            if (h->tls && SSL_has_pending(h->tls))
+            if (h->tls && SSL_has_pending(h->tls)) {
                 pending_tls = true;
+                timeout = 0;
+            }
 #endif
         }
         if (h->output_head)
@@ -1352,7 +1393,7 @@ network_process_io(int timeout)
     }
     add_registered_fds();
 
-    if (!pending_tls && mplex_wait(timeout))
+    if (mplex_wait(timeout) && !pending_tls)
         return 0;
     else {
         for (l = all_nlisteners; l; l = l->next)
@@ -1360,8 +1401,8 @@ network_process_io(int timeout)
                 accept_new_connection(l);
         for (h = all_nhandles; h; h = hnext) {
             hnext = h->next;
-            if (((mplex_is_readable(h->rfd) && !pull_input(h))
-                    || (mplex_is_writable(h->wfd) && !push_output(h))) && h->refcount.load() == 1) {
+            if (((fd_is_readable(h) && !pull_input(h))
+                    || (mplex_is_writable(h->wfd) && !push_output(h))) && get_nhandle_refcount(h) == 1) {
                 server_close(h->shandle);
                 network_handle nh;
                 nh.ptr = h;
@@ -1373,21 +1414,8 @@ network_process_io(int timeout)
     }
 }
 
-bool
-network_is_localhost(const network_handle nh)
-{
-    const nhandle *h = (nhandle *) nh.ptr;
-    const char *ip = h->destination_ipaddr;
-    int ret = 0;
-
-    if (strcmp(ip, "127.0.0.1") == 0 || strcmp(ip, "::1") == 0)
-        ret = 1;
-
-    return ret;
-}
-
 int
-rewrite_connection_name(network_handle nh, const char *destination, const char *destination_ip, const char *source, const char *source_port)
+rewrite_connection_name(const network_handle nh, const char *destination, const char *destination_ip, const char *source, const char *source_port)
 {
     const char *nameinfo;
     struct addrinfo *address;
@@ -1419,13 +1447,9 @@ rewrite_connection_name(network_handle nh, const char *destination, const char *
 }
 
 int
-network_name_lookup_rewrite(Objid obj, const char *name)
+network_name_lookup_rewrite(const Objid obj, const char *name, const network_handle nh)
 {
-    network_handle *nh;
-    if (find_network_handle(obj, &nh) < 0)
-        return -1;
-
-    nhandle *h = (nhandle *) nh->ptr;
+    nhandle *h = (nhandle *) nh.ptr;
 
     pthread_mutex_lock(h->name_mutex);
     applog(LOG_INFO3, "NAME_LOOKUP: connection_name for #%" PRIdN " changed from `%s` to `%s`\n", obj, h->name, name);
@@ -1450,10 +1474,24 @@ unlock_connection_name_mutex(const network_handle nh)
     pthread_mutex_unlock(h->name_mutex);
 }
 
+uint32_t
+get_nhandle_refcount(const network_handle nh)
+{
+    nhandle *h = (nhandle *)nh.ptr;
+    return h->refcount;
+}
+
+uint32_t
+get_nhandle_refcount(nhandle *h)
+{
+    return h->refcount;
+}
+
 void
 increment_nhandle_refcount(const network_handle nh)
 {
     nhandle *h = (nhandle *)nh.ptr;
+
     h->refcount++;
 }
 
@@ -1461,16 +1499,9 @@ void
 decrement_nhandle_refcount(const network_handle nh)
 {
     nhandle *h = (nhandle *)nh.ptr;
-    h->refcount--;
 
-    if (h->refcount.load() <= 0)
+    if (--h->refcount <= 0)
         close_nhandle(h);
-}
-
-int
-nhandle_refcount(const network_handle nh)
-{
-    return ((nhandle*)nh.ptr)->refcount.load();
 }
 
 const char *
@@ -1486,20 +1517,21 @@ lookup_network_connection_name(const network_handle nh, const char **name)
     const nhandle *h = (nhandle *) nh.ptr;
     int retval = 0;
 
-    pthread_mutex_lock(h->name_mutex);
-
     struct addrinfo *address = 0;
     int status = getaddrinfo(h->destination_ipaddr, nullptr, &tcp_hint, &address);
+
     if (status < 0) {
         // Better luck next time.
+        pthread_mutex_lock(h->name_mutex);
         *name = str_dup(h->name);
+        pthread_mutex_unlock(h->name_mutex);
         retval = -1;
     } else {
         *name = get_nameinfo(address->ai_addr);
     }
     if (address)
         freeaddrinfo(address);
-    pthread_mutex_unlock(h->name_mutex);
+
     return retval;
 }
 
@@ -1509,15 +1541,11 @@ full_network_connection_name(const network_handle nh, bool legacy)
     const nhandle *h = (nhandle *)nh.ptr;
     char *ret = nullptr;
 
-    pthread_mutex_lock(h->name_mutex);
-
     if (legacy) {
         asprintf(&ret, "port %i %s %s [%s], port %i", h->source_port, h->outbound ? "to" : "from", h->name, h->destination_ipaddr, h->destination_port);
     } else {
         asprintf(&ret, "%s [%s], port %i %s %s [%s], port %i", h->source_address, h->source_ipaddr, h->source_port, h->outbound ? "to" : "from", h->name, h->destination_ipaddr, h->destination_port);
     }
-
-    pthread_mutex_unlock(h->name_mutex);
 
     return ret;
 }
@@ -1527,9 +1555,7 @@ network_ip_address(const network_handle nh)
 {
     const nhandle *h = (nhandle *) nh.ptr;
 
-    pthread_mutex_lock(h->name_mutex);
     const char *ret = h->destination_ipaddr;
-    pthread_mutex_unlock(h->name_mutex);
     return ret;
 }
 
@@ -1561,9 +1587,7 @@ uint16_t
 network_source_port(const network_handle nh)
 {
     const nhandle *h = (nhandle *)nh.ptr;
-    pthread_mutex_lock(h->name_mutex);
     uint16_t port = h->source_port;
-    pthread_mutex_unlock(h->name_mutex);
 
     return port;
 }
@@ -1607,7 +1631,7 @@ tls_connection_info(const network_handle nh)
     static Var active_key_name = str_dup_to_var("active");
     static Var tls_version = str_dup_to_var("version");
     const nhandle *h = (nhandle *)nh.ptr;
-    Var ret = new_map();
+    Var ret = new_map(3);
 
     ret = mapinsert(ret, var_ref(active_key_name), Var::new_int(h->tls != nullptr));
     if (h->tls) {
@@ -1627,10 +1651,18 @@ network_set_connection_binary(network_handle nh, bool do_binary)
     h->binary = do_binary;
 }
 
-#    define NETWORK_CO_TABLE(DEFINE, nh, value, _)      \
-    DEFINE(client-echo, _, TYPE_INT, num,            \
-           ((nhandle *)nh.ptr)->client_echo,         \
-           network_set_client_echo(nh, is_true(value));) \
+#define NETWORK_CO_TABLE(DEFINE, nh, value, _)                  \
+    DEFINE(client-echo, _, TYPE_INT, num,                       \
+           ((nhandle *)nh.ptr)->client_echo,                    \
+           network_set_client_echo(nh, is_true(value));         \
+           )                                                    \
+                                                                \
+    DEFINE(keep-alive, _, TYPE_MAP, map,                        \
+            network_keep_alive_map(nh).v.map,                   \
+            {                                                   \
+                if (!network_set_client_keep_alive(nh, value))  \
+                    return 0;                                   \
+            })                                                  \
 
 void
 network_set_client_echo(network_handle nh, int is_on)
@@ -1653,8 +1685,72 @@ network_set_client_echo(network_handle nh, int is_on)
     enqueue_output(nh, telnet_cmd, 3, 0, 1);
 }
 
+static Var
+network_keep_alive_map(network_handle nh)
+{
+    nhandle *h = (nhandle*)nh.ptr;
+
+    Var ret = new_map(0);
+    ret = mapinsert(ret, str_dup_to_var("enabled"), Var::new_int(h->keep_alive));
+    ret = mapinsert(ret, str_dup_to_var("idle"), Var::new_int(h->keep_alive_idle));
+    ret = mapinsert(ret, str_dup_to_var("interval"), Var::new_int(h->keep_alive_interval));
+    ret = mapinsert(ret, str_dup_to_var("count"), Var::new_int(h->keep_alive_count));
+
+    return ret;
+}
+
+/* Set keep-alive options for a connection. The arguments can either be an int or a map.
+    INT: Enable or disable. If enabling, default options are used. (See below.)
+    MAP: A MAP containing the various options that can be set. It's assumed that a 
+        non-empty MAP being provided means you want to enable TCP keepalive on the connection.
+    Defaults can be found in options.h.
+*/
+int
+network_set_client_keep_alive(network_handle nh, Var map)
+{
+    if (map.type != TYPE_INT && map.type != TYPE_MAP)
+        return 0;
+
+    nhandle *h = (nhandle*)nh.ptr;
+    int keep_alive = h->keep_alive;
+    int idle = h->keep_alive_idle;
+    int interval = h->keep_alive_interval;
+    int count = h->keep_alive_count;
+    Var value;
+
+    keep_alive = is_true(map);
+
+    if (map.type == TYPE_MAP) {
+        if (mapstrlookup(map, "idle", &value, 0) != nullptr && value.type == TYPE_INT && value.v.num > 0)
+            idle = value.v.num;
+        if (mapstrlookup(map, "interval", &value, 0) != nullptr && value.type == TYPE_INT && value.v.num > 0)
+            interval = value.v.num;
+        if (mapstrlookup(map, "count", &value, 0) != nullptr && value.type == TYPE_INT && value.v.num > 0)
+            count = value.v.num;        
+    }
+
+    if (setsockopt(h->rfd, SOL_SOCKET, SO_KEEPALIVE, &keep_alive, sizeof(keep_alive)) < 0 ||
+#ifndef __MACH__
+setsockopt(h->rfd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) < 0 ||
+#else
+setsockopt(h->rfd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle)) < 0 ||
+#endif
+        setsockopt(h->rfd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval)) < 0 ||
+        setsockopt(h->rfd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) < 0) 
+    {
+        log_perror("TCP keepalive setsockopt failed");
+        return 0;
+    } else {
+        h->keep_alive = keep_alive;
+        h->keep_alive_idle = idle;
+        h->keep_alive_interval = interval;
+        h->keep_alive_count = count;
+        return 1;
+    }
+}
+
 #ifdef OUTBOUND_NETWORK
-enum error
+extern package
 network_open_connection(Var arglist, server_listener sl, bool use_ipv6 USE_TLS_BOOL_DEF)
 {
     int rfd, wfd;
@@ -1662,14 +1758,15 @@ network_open_connection(Var arglist, server_listener sl, bool use_ipv6 USE_TLS_B
     const char *ip_addr;
     uint16_t port;
     sa_family_t protocol;
-    enum error e;
+    package e;
     nhandle *h;
 #ifdef USE_TLS
     SSL *tls = nullptr;
 #endif
 
     e = open_connection(arglist, &rfd, &wfd, &name, &ip_addr, &port, &protocol, use_ipv6 USE_TLS_BOOL SSL_CONTEXT_2_ARG);
-    if (e == E_NONE) {
+
+    if(std::get<raise_t>(e.u).code.v.err == E_NONE) {
         h = make_new_connection(sl, rfd, wfd, 1, 0, nullptr, nullptr, port, name, ip_addr, protocol SSL_CONTEXT_1_ARG);
 #ifdef USE_TLS
         h->connected = true;
@@ -1695,8 +1792,19 @@ network_close_listener(network_listener nl)
 void
 network_shutdown(void)
 {
-    while (all_nhandles)
-        close_nhandle(all_nhandles);
+    /* This would be a good candidate for deferred deletion buuuut...
+     * we're shutting down anyway, may as well do it the lazy way. */
+    std::vector<network_handle> handles;
+
+    for (nhandle *h = all_nhandles; h; h = h->next) {
+        network_handle nh;
+        nh.ptr = h;
+        handles.push_back(nh);
+    }
+
+    for (network_handle nh : handles)
+        decrement_nhandle_refcount(nh);
+
     while (all_nlisteners)
         close_nlistener(all_nlisteners);
 }
@@ -1717,4 +1825,17 @@ int
 network_set_connection_option(network_handle nh, const char *option, Var value)
 {
     CONNECTION_OPTION_SET(NETWORK_CO_TABLE, nh, option, value);
+}
+
+static inline bool fd_is_readable(const nhandle *h)
+{
+    if (mplex_is_readable(h->rfd))
+        return true;
+
+#ifdef USE_TLS
+    if (h->tls && SSL_has_pending(h->tls))
+        return true;
+#endif
+
+    return false;
 }

@@ -18,7 +18,7 @@
 #include <limits.h>
 
 #include "ast.h"
-#include "functions.h"
+#include "log.h"
 #include "opcode.h"
 #include "program.h"
 #include "server.h"
@@ -98,7 +98,8 @@ typedef struct state State;
                                 (1 << SLOT_PREPSTR) | \
                                 (1 << SLOT_IOBJ) | \
                                 (1 << SLOT_IOBJSTR) | \
-                                (1 << SLOT_PLAYER))
+                                (1 << SLOT_PLAYER) | \
+                                (1 << SLOT_CMDSTR))
 #else               /* no BYTECODE_REDUCE_REF */
 #define INCR_TRY_DEPTH(SSS)
 #define DECR_TRY_DEPTH(SSS)
@@ -266,8 +267,7 @@ add_literal(Var v, State * state)
         if (gstate->num_literals == gstate->max_literals) {
             unsigned new_max = gstate->max_literals == 0
                                ? 5 : 2 * gstate->max_literals;
-            Var *new_literals = (Var *)mymalloc(sizeof(Var) * new_max,
-                                                M_CODE_GEN);
+            Var *new_literals = (Var*)mymalloc(sizeof(Var) * new_max, M_CODE_GEN);
 
             if (gstate->literals) {
                 for (i = 0; i < gstate->num_literals; i++)
@@ -275,6 +275,7 @@ add_literal(Var v, State * state)
 
                 myfree(literals, M_CODE_GEN);
             }
+
             gstate->literals = new_literals;
             gstate->max_literals = new_max;
         }
@@ -823,6 +824,12 @@ generate_expr(Expr * expr, State * state)
                 emit_byte(OP_BI_FUNC_CALL, state);
                 emit_byte(expr->e.call.func, state);
             }
+            break;
+        case EXPR_CALL_HANDLE:
+            generate_expr(expr->e.handle.verb, state);
+            generate_expr(expr->e.handle.obj, state);
+            emit_extended_byte(EOP_CALL_HANDLE, state);
+            pop_stack(1, state);
             break;
         case EXPR_VERB:
             generate_expr(expr->e.verb.obj, state);
@@ -1412,8 +1419,7 @@ generate_code(Stmt * stmt, DB_Version version)
     if (gstate.literals) {
         unsigned i;
 
-        prog->literals = (Var *)mymalloc(sizeof(Var) * gstate.num_literals,
-                                         M_LIT_LIST);
+        prog->literals = (Var *)mymalloc(sizeof(Var) * gstate.num_literals, M_LIT_LIST);
         prog->num_literals = gstate.num_literals;
         for (i = 0; i < gstate.num_literals; i++)
             prog->literals[i] = gstate.literals[i];

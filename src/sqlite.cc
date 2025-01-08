@@ -67,8 +67,7 @@ static Var string_to_moo_type(char* str, bool parse_objects, bool sanitize_strin
     } else if (parse_number(str, &int_test, 0) == 1) {
         s.type = TYPE_INT;
         s.v.num = int_test;
-    } else if (parse_float(str, &double_test) == 1)
-    {
+    } else if (parse_float(str, &double_test) == 1) {
         s.type = TYPE_FLOAT;
         s.v.fnum = double_test;
     } else {
@@ -174,8 +173,8 @@ static int callback(void *index, int argc, char **argv, char **azColName)
 
         if (thread_handle->include_headers) {
             Var tmp_value = new_list(2);
-            tmp_value.v.list[1] = str_dup_to_var(azColName[i]);
-            tmp_value.v.list[2] = s;
+            tmp_value[1] = str_dup_to_var(azColName[i]);
+            tmp_value[2] = s;
             ret = listappend(ret, tmp_value);
         } else {
             ret = listappend(ret, s);
@@ -225,16 +224,28 @@ bf_sqlite_open(Var arglist, Byte next, void *vdata, Objid progr)
         return make_raise_pack(E_QUOTA, "Too many database connections open.", var_ref(zero));
     }
 
-    /* NOTE: This relies on having FileIO. If you don't, you'll need
-     *       a function to resolve a SAFE path. */
-    const char *path = file_resolve_path(arglist.v.list[1].v.str);
-    if (path == nullptr)
+    const char *unresolved_path = arglist[1].v.str;
+    const char *path = nullptr;
+    int dup_check = -1;
+
+    // Check for :memory: or "" database
+    if (strcmp(unresolved_path, ":memory:") == 0 || strcmp(unresolved_path, "") == 0)
     {
-        free_var(arglist);
-        return make_error_pack(E_INVARG);
+        path = unresolved_path;  // No resolution needed
+    }
+    else
+    {
+        /* NOTE: This relies on having FileIO. If you don't, you'll need
+         *       a function to resolve a SAFE path. */
+        path = file_resolve_path(unresolved_path);
+        if (path == nullptr)
+        {
+            free_var(arglist);
+            return make_error_pack(E_INVARG);
+        }
+        dup_check = database_already_open(path);
     }
 
-    int dup_check = database_already_open(path);
     if (dup_check != -1)
     {
         free_var(arglist);
@@ -246,8 +257,8 @@ bf_sqlite_open(Var arglist, Byte next, void *vdata, Objid progr)
     index = allocate_handle();
     sqlite_conn *handle = sqlite_connections[index];
 
-    if (arglist.v.list[0].v.num >= 2)
-        handle->options = arglist.v.list[2].v.num;
+    if (arglist.length() >= 2)
+        handle->options = arglist[2].v.num;
 
     free_var(arglist);
 
@@ -258,7 +269,9 @@ bf_sqlite_open(Var arglist, Byte next, void *vdata, Objid progr)
         const char *err = sqlite3_errmsg(handle->id);
         deallocate_handle(index, false);
         return make_raise_pack(E_NONE, err, var_ref(zero));
-    } else {
+    }
+    else
+    {
 #ifdef PCRE_FOUND
         sqlite3_create_function(handle->id, "REGEXP", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr, &sqlite_regexp, nullptr, nullptr);
 #endif
@@ -281,7 +294,7 @@ bf_sqlite_close(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    int index = arglist.v.list[1].v.num;
+    int index = arglist[1].v.num;
     free_var(arglist);
 
     if (!valid_handle(index))
@@ -309,7 +322,7 @@ bf_sqlite_handles(Var arglist, Byte next, void *vdata, Objid progr)
 
     int count = 0;
     for (auto& it : sqlite_connections)
-        r.v.list[++count] = Var::new_int(it.first);
+        r[++count] = Var::new_int(it.first);
 
     return make_var_pack(r);
 }
@@ -325,7 +338,7 @@ bf_sqlite_info(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    int index = arglist.v.list[1].v.num;
+    int index = arglist[1].v.num;
     free_var(arglist);
 
     if (!valid_handle(index))
@@ -333,7 +346,7 @@ bf_sqlite_info(Var arglist, Byte next, void *vdata, Objid progr)
 
     sqlite_conn *handle = sqlite_connections[index];
 
-    Var ret = new_map();
+    Var ret = new_map(0);
     ret = mapinsert(ret, str_dup_to_var("path"), str_dup_to_var(handle->path));
     ret = mapinsert(ret, str_dup_to_var("parse_types"), Var::new_int(handle->options & SQLITE_PARSE_TYPES ? 1 : 0));
     ret = mapinsert(ret, str_dup_to_var("parse_objects"), Var::new_int(handle->options & SQLITE_PARSE_OBJECTS ? 1 : 0));
@@ -346,9 +359,9 @@ bf_sqlite_info(Var arglist, Byte next, void *vdata, Objid progr)
 /* The function responsible for the actual execute call.
  * Contains functionality shared by both the threaded and
  * unthreaded builtins. */
-static void sqlite_execute_thread_callback(Var args, Var *r)
+static void sqlite_execute_thread_callback(Var args, Var *r, void *extra_data)
 {
-    int index = args.v.list[1].v.num;
+    int index = args[1].v.num;
     if (!valid_handle(index))
     {
         r->type = TYPE_ERR;
@@ -356,7 +369,7 @@ static void sqlite_execute_thread_callback(Var args, Var *r)
         return;
     }
 
-    const char *query = args.v.list[2].v.str;
+    const char *query = args[2].v.str;
     sqlite_conn *handle = sqlite_connections[index];
     sqlite3_stmt *stmt;
 
@@ -373,22 +386,26 @@ static void sqlite_execute_thread_callback(Var args, Var *r)
 
     /* Take args[3] and bind it into the appropriate locations for SQLite
      * (e.g. in the query values (?, ?, ?) args[3] would be {5, "oh", "hello"}) */
-    for (int x = 1; x <= args.v.list[3].v.list[0].v.num; x++)
+    for (int x = 1; x <= args[3].length(); x++)
     {
-        switch (args.v.list[3].v.list[x].type)
+        switch (args[3][x].type)
         {
             case TYPE_STR:
-                sqlite3_bind_text(stmt, x, args.v.list[3].v.list[x].v.str, -1, nullptr);
+                sqlite3_bind_text(stmt, x, args[3][x].v.str, -1, nullptr);
                 break;
             case TYPE_INT:
-                sqlite3_bind_int(stmt, x, args.v.list[3].v.list[x].v.num);
+                sqlite3_bind_int(stmt, x, args[3][x].v.num);
                 break;
             case TYPE_FLOAT:
-                sqlite3_bind_double(stmt, x, args.v.list[3].v.list[x].v.fnum);
+                sqlite3_bind_double(stmt, x, args[3][x].v.fnum);
                 break;
             case TYPE_OBJ:
-                sqlite3_bind_text(stmt, x, object_to_string(&args.v.list[3].v.list[x]),  -1, nullptr);
+            {
+                char *to_string = object_to_string(&args[3][x]);
+                sqlite3_bind_text(stmt, x, to_string, -1, SQLITE_TRANSIENT);
+                free(to_string);
                 break;
+            }
         }
     }
 
@@ -452,18 +469,15 @@ bf_sqlite_execute(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    char *human_string = nullptr;
-    asprintf(&human_string, "sqlite_execute: %s", arglist.v.list[2].v.str);
-
-    return background_thread(sqlite_execute_thread_callback, &arglist, human_string);
+    return background_thread(sqlite_execute_thread_callback, &arglist);
 }
 
 /* The function responsible for the actual query call.
  * Contains functionality shared by both the threaded and
  * unthreaded builtins. */
-static void sqlite_query_thread_callback(Var args, Var *r)
+static void sqlite_query_thread_callback(Var args, Var *r, void *extra_data)
 {
-    int index = args.v.list[1].v.num;
+    int index = args[1].v.num;
 
     if (!valid_handle(index))
     {
@@ -472,13 +486,13 @@ static void sqlite_query_thread_callback(Var args, Var *r)
         return;
     }
 
-    const char *query = args.v.list[2].v.str;
+    const char *query = args[2].v.str;
     char *err_msg = nullptr;
 
     sqlite_result *thread_handle = (sqlite_result*)mymalloc(sizeof(sqlite_result), M_STRUCT);
     thread_handle->connection = sqlite_connections[index];
     thread_handle->last_result = new_list(0);
-    thread_handle->include_headers = args.v.list[0].v.num > 2 && is_true(args.v.list[3]);
+    thread_handle->include_headers = args.length() > 2 && is_true(args[3]);
 
     thread_handle->connection->locks++;
 
@@ -510,10 +524,7 @@ bf_sqlite_query(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    char *human_string = nullptr;
-    asprintf(&human_string, "sqlite_query: %s", arglist.v.list[2].v.str);
-
-    return background_thread(sqlite_query_thread_callback, &arglist, human_string);
+    return background_thread(sqlite_query_thread_callback, &arglist);
 }
 
 /* Identifies the row ID of the last insert command.
@@ -527,7 +538,7 @@ bf_sqlite_last_insert_row_id(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    int index = arglist.v.list[1].v.num;
+    int index = arglist[1].v.num;
     free_var(arglist);
 
     if (!valid_handle(index))
@@ -572,24 +583,24 @@ bf_sqlite_limit(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    int index = arglist.v.list[1].v.num;
+    int index = arglist[1].v.num;
     if (!valid_handle(index)) {
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
 
     int category = -1;
-    int new_value = arglist.v.list[3].v.num;
+    int new_value = arglist[3].v.num;
 
-    if (arglist.v.list[2].type == TYPE_STR) {
-        const char *player_category = arglist.v.list[2].v.str;
+    if (arglist[2].type == TYPE_STR) {
+        const char *player_category = arglist[2].v.str;
         for (auto category_name : categories)
             if (!strcmp(player_category, category_name.str)) {
                 category = category_name.value;
                 break;
             }
-    } else if (arglist.v.list[2].type == TYPE_INT) {
-        category = arglist.v.list[2].v.num;
+    } else if (arglist[2].type == TYPE_INT) {
+        category = arglist[2].v.num;
     }
 
     free_var(arglist);
@@ -617,7 +628,7 @@ bf_sqlite_interrupt(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_PERM);
     }
 
-    int index = arglist.v.list[1].v.num;
+    int index = arglist[1].v.num;
     free_var(arglist);
 
     if (!valid_handle(index))
@@ -657,3 +668,4 @@ register_sqlite() {
 void register_sqlite(void) { }
 void sqlite_shutdown(void) { }
 #endif
+

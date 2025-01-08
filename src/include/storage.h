@@ -15,36 +15,24 @@
     Pavel@Xerox.Com
  *****************************************************************************/
 
-#ifndef STORAGE_H
-#define STORAGE_H 1
+#ifndef Storage_h
+#define Storage_h 1
 
-#include <stdlib.h>
-#include <string.h>
-#include <new>  // bad_alloc, bad_array_new_length
+#include <atomic>
 #include "options.h"
 
-#define REFCOUNT_OFFSET -1
-#define REFCOUNT(p)    (*((refcount_t*)p+REFCOUNT_OFFSET))
-#define GC_OVERHEAD(p) ((gc_overhead *)ptr)[GC_OFFSET]
+#define IS_POWER_OF_TWO(v) (v & -v) == v
 
-#if defined(UNSAFE_REFCOUNT)
-    #include <stdint.h>
-    using refcount_t = uint32_t;
-    #define GET_REFCOUNT(p) REFCOUNT(p)
-#else
-    #include <atomic>
-    using refcount_t = std::atomic<uint_fast32_t>;
-    #define GET_REFCOUNT(p) REFCOUNT(p).load()
-#endif
-
-#if defined(MEMO_STRLEN) || defined(MEMO_VALUE_BYTES)
-#define MEMO_OFFSET REFCOUNT_OFFSET - 1
-#else
-#define MEMO_OFFSET REFCOUNT_OFFSET
-#endif
-#ifdef ENABLE_GC
-#define GC_OFFSET MEMO_OFFSET - 1
-#endif
+inline int next_power_of_two(unsigned int v) { // compute the next highest power of 2 of 32-bit v
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return static_cast<int>(v);
+}
 
 #ifdef ENABLE_GC
 /* See "Concurrent Cycle Collection in Reference Counted Systems",
@@ -60,37 +48,75 @@ typedef enum GC_Color {
     GC_PURPLE,
     GC_PINK
 } GC_Color;
+ #endif
 
-typedef struct gc_overhead {
-    unsigned int buffered : 1;
-    GC_Color color : 3;
-} gc_overhead;
+typedef struct var_metadata {
+    std::atomic<uint32_t> refcount;
+#ifdef MEMO_SIZE
+    uint32_t size;                      // MEMO_SIZE: strlen / list/map bytes
+#endif
+#ifdef ENABLE_GC
+    GC_Color color:3;
+    unsigned int buffered:1;
+#endif
+} var_metadata;
 
+static inline uint32_t
+addref(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    return ++(metadata->refcount);
+}
+
+static inline uint32_t
+delref(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    return --(metadata->refcount);
+}
+
+static inline uint32_t
+refcount(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    return metadata->refcount;
+}
+
+#ifdef ENABLE_GC
 static inline void
-gc_set_buffered(const void *ptr) {
-    GC_OVERHEAD(ptr).buffered = 1;
+gc_set_buffered(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    metadata->buffered = 1;
 }
 
 static inline void
-gc_clear_buffered(const void *ptr) {
-    GC_OVERHEAD(ptr).buffered = 0;
+gc_clear_buffered(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    metadata->buffered = 0;
 }
 
 static inline int
-gc_is_buffered(const void *ptr) {
-    return GC_OVERHEAD(ptr).buffered;
+gc_is_buffered(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    return metadata->buffered;
 }
 
 static inline void
-gc_set_color(const void *ptr, GC_Color color) {
-    GC_OVERHEAD(ptr).color = color;
+gc_set_color(const void *ptr, GC_Color color)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    metadata->color = color;
 }
 
 static inline GC_Color
-gc_get_color(const void *ptr) {
-    return GC_OVERHEAD(ptr).color;
+gc_get_color(const void *ptr)
+{
+    var_metadata *metadata = ((var_metadata*)ptr) - 1;
+    return metadata->color;
 }
-
 #endif
 
 typedef enum Memory_Type {
@@ -106,67 +132,42 @@ typedef enum Memory_Type {
     M_REF_ENTRY, M_REF_TABLE, M_VC_ENTRY, M_VC_TABLE, M_STRING_PTRS,
     M_INTERN_POINTER, M_INTERN_ENTRY, M_INTERN_HUNK,
 
-    M_MAP, M_TREE, M_NODE, M_TRAV,
+    M_TREE, M_NODE, M_TRAV,
 
     M_ANON, /* anonymous object */
 
     M_WAIF, M_WAIF_XTRA,
 
+    M_CALL, M_COMPLEX, M_MATRIX,
+
     /* to be used when no more specific type applies */
     M_STRUCT, M_ARRAY
 } Memory_Type;
 
-static inline int
-addref(const void *ptr) {
-    return ++REFCOUNT(ptr);
-}
-
-static inline int
-delref(const void *ptr) {
-    return --REFCOUNT(ptr);
-}
-
-static inline int
-refcount(const void *ptr) {
-    return static_cast<int>(GET_REFCOUNT(ptr));
-}
-
 extern char *str_dup(const char *);
 extern const char *str_ref(const char *);
-extern void myfree(void *where, Memory_Type type);
-extern size_t mymemsize(void *ptr);
+
 extern void myfree(void *where, Memory_Type type);
 extern void *mymalloc(unsigned size, Memory_Type type);
+extern void *mycalloc(unsigned count, unsigned size, Memory_Type type);
 extern void *myrealloc(void *where, unsigned size, Memory_Type type);
 
-static inline void /* XXX was extern, fix for non-gcc compilers */
-free_str(const char *s) {
+static inline void      /* XXX was extern, fix for non-gcc compilers */
+free_str(const char *s)
+{
     if (delref(s) == 0)
-        myfree((void *)s, M_STRING);
+    myfree((void *) s, M_STRING);
 }
 
-#ifdef MEMO_STRLEN
+#ifdef MEMO_SIZE
 /*
  * Using the same mechanism as ref_count.h uses to hide Value ref counts,
  * keep a memozied strlen in the storage with the string.
  */
-#define memo_strlen(X) ((void)0, (((int *)(X))[MEMO_OFFSET]))
+#define memo_strlen(X)      ((void)0, (((var_metadata *)(X))[-1].size))
 #else
-#define memo_strlen(X) strlen(X)
+#define memo_strlen(X)      strlen(X)
 
 #endif /* MEMO_STRLEN */
 
-#define IS_POWER_OF_TWO(v) (v & -v) == v
-
-static inline int next_power_of_two(unsigned int v) { // compute the next highest power of 2 of 32-bit v
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v++;
-    return static_cast<int>(v);
-}
-
-#endif /* STORAGE_H */
+#endif              /* Storage_h */

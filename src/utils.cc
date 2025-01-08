@@ -127,12 +127,12 @@ str_hash(const char *s)
 void
 aux_free(Var v)
 {
-    switch ((int) v.type) {
+    switch (v.type) {
         case TYPE_LIST:
             myfree(v.v.list, M_LIST);
             break;
         case TYPE_MAP:
-            myfree(v.v.tree, M_TREE);
+            myfree(v.v.map, M_TREE);
             break;
         case TYPE_ANON:
             assert(db_object_has_flag2(v, FLAG_INVALID));
@@ -152,34 +152,34 @@ complex_free_var(Var v)
                 free_str(v.v.str);
             break;
         case TYPE_LIST:
-            if (delref(v.v.list) == 0) {
-                destroy_list(v);
+            if (delref(v.v.list) == 0 && destroy_list(v)) {
                 gc_set_color(v.v.list, GC_BLACK);
                 if (!gc_is_buffered(v.v.list))
                     myfree(v.v.list, M_LIST);
-            }
-            else
+            } else
                 gc_possible_root(v);
             break;
         case TYPE_MAP:
-            if (delref(v.v.tree) == 0) {
-                destroy_map(v);
-                gc_set_color(v.v.tree, GC_BLACK);
-                if (!gc_is_buffered(v.v.tree))
-                    myfree(v.v.tree, M_TREE);
-            }
-            else
+            if (delref(v.v.map) == 0 && destroy_map(v)) {
+                gc_set_color(v.v.map, GC_BLACK);
+                if (!gc_is_buffered(v.v.map))
+                    myfree(v.v.map, M_TREE);
+            } else
                 gc_possible_root(v);
-            break;
-        case TYPE_ITER:
-            if (delref(v.v.trav) == 0)
-                destroy_iter(v);
             break;
         case TYPE_WAIF:
             if (delref(v.v.waif) == 0) {
                 if (destroyed_waifs.count(v.v.waif) == 0)
                     destroyed_waifs[v.v.waif] = false;
             }
+            break;
+        case TYPE_CALL:
+            if(delref(v.v.call) == 0 && destroy_call(v)) {
+                gc_set_color(v.v.call, GC_BLACK);
+                if (!gc_is_buffered(v.v.call))
+                    myfree(v.v.call, M_CALL);
+            } else
+                gc_possible_root(v);
             break;
         case TYPE_ANON:
             /* The first time an anonymous object's reference count drops
@@ -218,22 +218,18 @@ complex_free_var(Var v)
 void
 complex_free_var(Var v)
 {
-    switch ((int) v.type) {
+    switch (v.type) {
         case TYPE_STR:
             if (v.v.str)
                 free_str(v.v.str);
             break;
         case TYPE_LIST:
-            if (delref(v.v.list) == 0)
-                destroy_list(v);
+            if (delref(v.v.list) == 0 && destroy_list(v))
+                myfree(v.v.list, M_LIST);
             break;
         case TYPE_MAP:
-            if (delref(v.v.tree) == 0)
-                destroy_map(v);
-            break;
-        case TYPE_ITER:
-            if (delref(v.v.trav) == 0)
-                destroy_iter(v);
+            if (delref(v.v.map) == 0 && destroy_map(v))
+                myfree(v.v.map, M_TREE);
             break;
         case TYPE_WAIF:
             if (delref(v.v.waif) == 0) {
@@ -241,6 +237,12 @@ complex_free_var(Var v)
                     destroyed_waifs[v.v.waif] = false;
                 }
             }
+            break;
+        case TYPE_CALL:
+        {
+            if(delref(v.v.call) == 0 && destroy_call(v))
+                myfree(v.v.call, M_CALL);
+        }
             break;
         case TYPE_ANON:
             if (v.v.anon && delref(v.v.anon) == 0) {
@@ -274,13 +276,13 @@ complex_var_ref(Var v)
             addref(v.v.list);
             break;
         case TYPE_MAP:
-            addref(v.v.tree);
-            break;
-        case TYPE_ITER:
-            addref(v.v.trav);
+            addref(v.v.map);
             break;
         case TYPE_WAIF:
             addref(v.v.waif);
+            break;
+        case TYPE_CALL:
+            addref(v.v.call);
             break;
         case TYPE_ANON:
             if (v.v.anon) {
@@ -304,13 +306,13 @@ complex_var_ref(Var v)
             addref(v.v.list);
             break;
         case TYPE_MAP:
-            addref(v.v.tree);
-            break;
-        case TYPE_ITER:
-            addref(v.v.trav);
+            addref(v.v.map);
             break;
         case TYPE_WAIF:
             addref(v.v.waif);
+            break;
+        case TYPE_CALL:
+            addref(v.v.call);
             break;
         case TYPE_ANON:
             if (v.v.anon)
@@ -334,11 +336,12 @@ complex_var_dup(Var v)
         case TYPE_MAP:
             v = map_dup(v);
             break;
-        case TYPE_ITER:
-            v = iter_dup(v);
-            break;
         case TYPE_WAIF:
             v.v.waif = dup_waif(v.v.waif);
+            break;
+        case TYPE_CALL:
+            addref(v.v.call);
+            return v;
             break;
         case TYPE_ANON:
             panic_moo("cannot var_dup() anonymous objects\n");
@@ -361,10 +364,7 @@ var_refcount(Var v)
             return refcount(v.v.list);
             break;
         case TYPE_MAP:
-            return refcount(v.v.tree);
-            break;
-        case TYPE_ITER:
-            return refcount(v.v.trav);
+            return refcount(v.v.map);
             break;
         case TYPE_ANON:
             if (v.v.anon)
@@ -372,6 +372,12 @@ var_refcount(Var v)
             break;
         case TYPE_WAIF:
             return refcount(v.v.waif);
+            break;
+        case TYPE_CALL:
+            return refcount(v.v.call);
+            break;
+        case TYPE_MATRIX:
+            return refcount(v.v.mat);
             break;
     }
     return 1;
@@ -389,11 +395,13 @@ is_true(Var v)
         case TYPE_STR:
             return v.v.str && *v.v.str != '\0';
         case TYPE_LIST:
-            return v.v.list[0].v.num != 0;
+            return v.length() != 0;
         case TYPE_MAP:
             return !mapempty(v);
         case TYPE_BOOL:
             return v.v.truth == true;
+        case TYPE_CALL:
+            return v.v.call != nullptr;
         default:
             return 0;
     }
@@ -423,7 +431,7 @@ compare(Var lhs, Var rhs, int case_matters)
                 else
                     return strcasecmp(lhs.v.str, rhs.v.str);
             case TYPE_FLOAT:
-                if (lhs.v.fnum == rhs.v.fnum)
+                if (std::fabs(lhs.v.fnum - rhs.v.fnum) < EPSILON)
                     return 0;
                 else
                     return (lhs.v.fnum - rhs.v.fnum) < 0.0 ? -1 : 1;
@@ -433,6 +441,12 @@ compare(Var lhs, Var rhs, int case_matters)
                 return lhs.v.anon == rhs.v.anon ? 0 : 1;
             case TYPE_BOOL:
                 return lhs.v.truth == rhs.v.truth ? 0 : 1;
+            case TYPE_CALL:
+                {
+                if(lhs.v.call->oid == rhs.v.call->oid)
+                    return strcasecmp(lhs.v.call->verbname, lhs.v.call->verbname);
+                }
+                return 0;
             default:
                 panic_moo("COMPARE: Invalid value type");
         }
@@ -445,12 +459,14 @@ equality(Var lhs, Var rhs, int case_matters)
 {
     if (lhs.type == rhs.type) {
         switch (lhs.type) {
+            case _TYPE_TYPE:
+                return (lhs.num() & rhs.num());
             case TYPE_CLEAR:
                 return 1;
             case TYPE_NONE:
                 return 1;
             case TYPE_INT:
-                return lhs.v.num == rhs.v.num;
+                return lhs.num() == rhs.num();
             case TYPE_OBJ:
                 return lhs.v.obj == rhs.v.obj;
             case TYPE_ERR:
@@ -458,7 +474,7 @@ equality(Var lhs, Var rhs, int case_matters)
             case TYPE_STR:
                 if (lhs.v.str == rhs.v.str)
                     return 1;
-#ifdef MEMO_STRLEN
+#ifdef MEMO_SIZE
                 else if (memo_strlen(lhs.v.str) != memo_strlen(rhs.v.str))
                     return 0;
 #endif /* memo_strlen */
@@ -467,7 +483,7 @@ equality(Var lhs, Var rhs, int case_matters)
                 else
                     return !strcasecmp(lhs.v.str, rhs.v.str);
             case TYPE_FLOAT:
-                return lhs.v.fnum == rhs.v.fnum;
+                return std::fabs(lhs.v.fnum - rhs.v.fnum) < EPSILON;
             case TYPE_LIST:
                 return listequal(lhs, rhs, case_matters);
             case TYPE_MAP:
@@ -478,16 +494,18 @@ equality(Var lhs, Var rhs, int case_matters)
                 return lhs.v.waif == rhs.v.waif;
             case TYPE_BOOL:
                 return lhs.v.truth == rhs.v.truth;
+            case TYPE_COMPLEX:
+                return lhs.complex() == rhs.complex();
             default:
                 panic_moo("EQUALITY: Unknown value type");
         }
     } else {
-        if (lhs.type == TYPE_BOOL && rhs.type == TYPE_INT) {
+        if(lhs.type == TYPE_BOOL && rhs.type == TYPE_INT)
             return rhs.v.num == lhs.v.truth;
-        }
-        else         if (rhs.type == TYPE_BOOL && lhs.type == TYPE_INT) {
+        else if(rhs.type == TYPE_BOOL && lhs.type == TYPE_INT)
             return lhs.v.num == rhs.v.truth;
-        }
+        else if(lhs.is_type() || rhs.is_type())
+            return (lhs.num() & rhs.num());
     }
     return 0;
 }
@@ -621,7 +639,7 @@ value_bytes(Var v)
             size += list_sizeof(v.v.list);
             break;
         case TYPE_MAP:
-            size += map_sizeof(v.v.tree);
+            size += map_sizeof(v);
             break;
         case TYPE_WAIF:
             size += waif_bytes(v.v.waif);

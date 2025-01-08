@@ -15,36 +15,35 @@
     Pavel@Xerox.Com
  *****************************************************************************/
 
-#include <atomic>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <sys/resource.h>  // getrusage
 #include <sys/stat.h>
-
-#include <cassert>
-#include <ctime>  // getrusage
+#include <sys/time.h>       // getrusage
+#include <sys/resource.h>   // getrusage
 #if !defined(__FreeBSD__) && !defined(__MACH__)
-#include <sys/sysinfo.h>  // CPU usage
+#include <sys/sysinfo.h>    // CPU usage
 #endif
 #ifdef __MACH__
 #include <mach/mach.h>
 #include <sys/sysctl.h>
 #endif
 
-#include <netinet/in.h>
+#include <string>
+#include <sstream>
+#include <fstream>
+#include <vector>
+#include <mutex>
+#include <getopt.h>
+#include <sys/types.h>      /* must be first on some systems */
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h> /* must be first on some systems */
-#include <sys/wait.h>
 #include <unistd.h>
-
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
+#include <sys/wait.h>
+#include <netinet/in.h>
 
 #include "config.h"
 #include "db.h"
@@ -56,19 +55,14 @@
 #ifdef ENABLE_GC
 #include "garbage.h"
 #endif
-#include <getopt.h>
-#include <nettle/sha2.h>
-
-#include "background.h"
-#include "curl.h" /* curl shutdown */
 #include "list.h"
 #include "log.h"
 #include "map.h"
+#include <nettle/sha2.h>
 #include "network.h"
 #include "numbers.h"
 #include "options.h"
 #include "parser.h"
-#include "pcre_moo.h" /* pcre shutdown */
 #include "quota.h"
 #include "random.h"
 #include "server.h"
@@ -81,6 +75,14 @@
 #include "utils.h"
 #include "version.h"
 #include "waif.h" /* destroyed_waifs */
+#include "curl.h" /* curl shutdown */
+#include "background.h"
+#include "map.h"
+#include "pcre_moo.h" /* pcre shutdown */
+
+#ifdef JEMALLOC_FOUND
+#include <jemalloc/jemalloc.h>
+#endif
 
 extern "C" {
     #include "dependencies/linenoise.h"
@@ -91,20 +93,17 @@ extern "C" {
 static pid_t parent_pid;
 static bool in_child = false;
 
-static const char* this_program;
+static const char *this_program;
 
 static std::stringstream shutdown_message;
 
-static bool shutdown_triggered = false;
+static std::atomic<bool> shutdown_triggered(false);
 static bool in_emergency_mode = false;
 
 static Var checkpointed_connections;
 
 typedef enum {
-    CHKPT_OFF,
-    CHKPT_TIMER,
-    CHKPT_SIGNAL,
-    CHKPT_FUNC
+    CHKPT_OFF, CHKPT_TIMER, CHKPT_SIGNAL, CHKPT_FUNC
 } Checkpoint_Reason;
 static Checkpoint_Reason checkpoint_requested = CHKPT_OFF;
 
@@ -112,8 +111,7 @@ static int checkpoint_finished = 0; /* 1 = failure, 2 = success */
 
 static bool reopen_logfile_requested = false;
 
-static void
-handle_user_defined_signal(int sig);
+static void handle_user_defined_signal(int sig);
 
 #ifdef OUTBOUND_NETWORK
 int outbound_network_enabled = OUTBOUND_NETWORK;
@@ -122,15 +120,15 @@ int outbound_network_enabled = false;
 #endif
 
 #ifdef USE_TLS
-const char* default_certificate_path = DEFAULT_TLS_CERT;
-const char* default_key_path = DEFAULT_TLS_KEY;
+const char *default_certificate_path = DEFAULT_TLS_CERT;
+const char *default_key_path = DEFAULT_TLS_KEY;
 #endif
 
 int clear_last_move = false;
-char* bind_ipv4 = nullptr;
-char* bind_ipv6 = nullptr;
-char* file_subdir = FILE_SUBDIR;
-char* exec_subdir = EXEC_SUBDIR;
+char *bind_ipv4 = nullptr;
+char *bind_ipv6 = nullptr;
+char *file_subdir = nullptr;
+char *exec_subdir = nullptr;
 
 typedef struct shandle {
     struct shandle *next, **prev;
@@ -140,38 +138,39 @@ typedef struct shandle {
     Objid player;
     Objid listener;
     task_queue tasks;
-    std::atomic<bool> disconnect_me;
     Objid switched;
     bool outbound, binary;
     bool print_messages;
+    std::atomic<bool> disconnect_me;
 } shandle;
 
-static shandle* all_shandles = nullptr;
+static shandle *all_shandles = nullptr;
+std::recursive_mutex all_shandles_mutex;
 
 typedef struct slistener {
-    struct slistener *next, **prev;
-    network_listener nlistener;
-    Objid oid; /* listen(OID, DESC, PRINT_MESSAGES, IPV6) */
     Var desc;
+    struct slistener *next, **prev;
+    const char *name;           // resolved hostname
+    const char *ip_addr;        // 'raw' IP address
+    network_listener nlistener;
+    Objid oid;          /* listen(OID, DESC, PRINT_MESSAGES, IPV6) */
     int print_messages;
+    uint16_t port;             // listening port
     bool ipv6;
-    const char* name;     // resolved hostname
-    const char* ip_addr;  // 'raw' IP address
-    uint16_t port;        // listening port
 } slistener;
 
-static slistener* all_slisteners = nullptr;
+static slistener *all_slisteners = nullptr;
 
 server_listener null_server_listener = {nullptr};
 
 struct pending_recycle {
-    struct pending_recycle* next;
     Var v;
+    struct pending_recycle *next;
 };
 
-static struct pending_recycle* pending_free = nullptr;
-static struct pending_recycle* pending_head = nullptr;
-static struct pending_recycle* pending_tail = nullptr;
+static struct pending_recycle *pending_free = nullptr;
+static struct pending_recycle *pending_head = nullptr;
+static struct pending_recycle *pending_tail = nullptr;
 static unsigned int pending_count = 0;
 
 /* used once when the server loads the database */
@@ -180,31 +179,36 @@ static Var pending_list = new_list(0);
 /* maplookup doesn't consume the key, so here are common map keys that
    are used by functions like listen() and open_network_connection() */
 static Var ipv6_key = str_dup_to_var("ipv6");
+static Var interface_key = str_dup_to_var("interface");
 #ifdef USE_TLS
 static Var tls_key = str_dup_to_var("TLS");
 #endif
 
 static void
-free_shandle(shandle* h) {
+free_shandle(shandle * h)
+{
+    all_shandles_mutex.lock();
     *(h->prev) = h->next;
     if (h->next)
         h->next->prev = h->prev;
+    all_shandles_mutex.unlock();
 
     free_task_queue(h->tasks);
 
     myfree(h, M_NETWORK);
 }
 
-static slistener*
-new_slistener(Objid oid, Var desc, int print_messages, enum error* ee, bool use_ipv6 USE_TLS_BOOL_DEF TLS_CERT_PATH_DEF) {
-    slistener* listener = (slistener*)mymalloc(sizeof(slistener), M_NETWORK);
+static slistener *
+new_slistener(Objid oid, Var desc, int print_messages, enum error *ee, bool use_ipv6, const char *interface USE_TLS_BOOL_DEF TLS_CERT_PATH_DEF)
+{
+    slistener *listener = (slistener *)mymalloc(sizeof(slistener), M_NETWORK);
     server_listener sl;
     enum error e;
     const char *name, *ip_address;
     uint16_t port;
 
     sl.ptr = listener;
-    e = network_make_listener(sl, desc, &(listener->nlistener), &name, &ip_address, &port, use_ipv6 USE_TLS_BOOL TLS_CERT_PATH);
+    e = network_make_listener(sl, desc, &(listener->nlistener), &name, &ip_address, &port, use_ipv6, interface USE_TLS_BOOL TLS_CERT_PATH);
 
     if (ee)
         *ee = e;
@@ -216,9 +220,9 @@ new_slistener(Objid oid, Var desc, int print_messages, enum error* ee, bool use_
 
     listener->oid = oid;
     listener->print_messages = print_messages;
-    listener->name = name;  // original copy
+    listener->name = name;                      // original copy
     listener->ipv6 = use_ipv6;
-    listener->ip_addr = ip_address;  // original copy
+    listener->ip_addr = ip_address;             // original copy
     listener->port = port;
     listener->desc = var_ref(desc);
 
@@ -232,7 +236,8 @@ new_slistener(Objid oid, Var desc, int print_messages, enum error* ee, bool use_
 }
 
 static int
-start_listener(slistener* l) {
+start_listener(slistener * l)
+{
     if (network_listen(l->nlistener)) {
         oklog("LISTEN: #%" PRIdN " now listening on %s [%s], port %i\n", l->oid, l->name, l->ip_addr, l->port);
         return 1;
@@ -243,7 +248,8 @@ start_listener(slistener* l) {
 }
 
 static void
-free_slistener(slistener* l) {
+free_slistener(slistener * l)
+{
     network_close_listener(l->nlistener);
     oklog("UNLISTEN: #%" PRIdN " no longer listening on %s\n", l->oid, l->name);
 
@@ -259,8 +265,9 @@ free_slistener(slistener* l) {
 }
 
 static void
-send_shutdown_message(const char* message) {
-    shandle* h;
+send_shutdown_message(const char *message)
+{
+    shandle *h;
     std::stringstream s;
 
     s << "*** Shutting down: " << message << " ***";
@@ -270,7 +277,8 @@ send_shutdown_message(const char* message) {
 }
 
 static void
-abort_server(void) {
+abort_server(void)
+{
     signal(SIGINT, SIG_DFL);
     signal(SIGTERM, SIG_DFL);
     signal(SIGFPE, SIG_DFL);
@@ -289,11 +297,14 @@ abort_server(void) {
 }
 
 static void
-output_to_log(const char* line) {
+output_to_log(const char *line)
+{
     errlog("%s\n", line);
 }
 
-void panic_moo(const char* message) {
+void
+panic_moo(const char *message)
+{
     static int in_panic = 0;
 
     errlog("PANIC%s: %s\n", in_child ? " (in child)" : "", message);
@@ -305,7 +316,7 @@ void panic_moo(const char* message) {
 
     log_command_history();
 
-    if (in_child) { /* We're a forked checkpointer */
+    if (in_child) {     /* We're a forked checkpointer */
         errlog("Child shutting down parent via INT signal\n");
         kill(parent_pid, SIGINT);
         _exit(1);
@@ -319,7 +330,8 @@ void panic_moo(const char* message) {
 }
 
 enum Fork_Result
-fork_server(const char* subtask_name) {
+fork_server(const char *subtask_name)
+{
     pid_t pid;
     std::stringstream s;
 
@@ -338,7 +350,8 @@ fork_server(const char* subtask_name) {
 }
 
 static void
-panic_signal(int sig) {
+panic_signal(int sig)
+{
     char message[100];
 
     sprintf(message, "Caught signal %d", sig);
@@ -346,56 +359,61 @@ panic_signal(int sig) {
 }
 
 static void
-shutdown_signal(int sig) {
+shutdown_signal(int sig)
+{
     shutdown_triggered = true;
     shutdown_message << "shutdown signal received";
 }
 
 static void
-logfile_signal() {
+logfile_signal()
+{
     if (get_log_file())
         reopen_logfile_requested = true;
 }
 
 static void
-checkpoint_signal(int sig) {
+checkpoint_signal(int sig)
+{
     checkpoint_requested = CHKPT_SIGNAL;
 
     signal(sig, handle_user_defined_signal);
 }
 
 static void
-handle_user_defined_signal(int sig) {
+handle_user_defined_signal(int sig)
+{
     Var args, result;
 
     args = new_list(1);
-    args.v.list[1].type = TYPE_STR;
-    args.v.list[1].v.str = str_dup(sig == SIGUSR1 ? "SIGUSR1" : "SIGUSR2");
+    args[1].type = TYPE_STR;
+    args[1].v.str = str_dup(sig == SIGUSR1 ? "SIGUSR1" : "SIGUSR2");
 
     if (run_server_task(-1, Var::new_obj(SYSTEM_OBJECT), "handle_signal", args, "", &result) != OUTCOME_DONE || is_true(result)) {
         /* :handle_signal returned true; do nothing. */
-    } else if (sig == SIGUSR1) { /* reopen logfile */
+    } else if (sig == SIGUSR1) {    /* reopen logfile */
         logfile_signal();
-    } else if (sig == SIGUSR2) { /* remote checkpoint signal */
+    } else if (sig == SIGUSR2) {    /* remote checkpoint signal */
         checkpoint_signal(sig);
     }
 
     free_var(result);
-    free_var(args);
 }
 
 static void
-call_checkpoint_notifier(int successful) {
+call_checkpoint_notifier(int successful)
+{
     Var args;
 
     args = new_list(1);
-    args.v.list[1].type = TYPE_INT;
-    args.v.list[1].v.num = successful;
+    args[1].type = TYPE_INT;
+    args[1].v.num = successful;
     run_server_task(-1, Var::new_obj(SYSTEM_OBJECT), "checkpoint_finished", args, "", nullptr);
 }
 
 static void
-child_completed_signal(int sig) {
+child_completed_signal(int sig)
+{
     int tmp_errno = errno;
     pid_t p;
     pid_t checkpoint_child = 0;
@@ -433,13 +451,14 @@ child_completed_signal(int sig) {
     signal(sig, child_completed_signal);
 
     if (checkpoint_child)
-        checkpoint_finished = (status == 0) + 1; /* 1 = failure, 2 = success */
+        checkpoint_finished = (status == 0) + 1;    /* 1 = failure, 2 = success */
 
     errno = tmp_errno;
 }
 
 static void
-setup_signals(void) {
+setup_signals(void)
+{
     signal(SIGFPE, SIG_IGN);
     if (signal(SIGHUP, panic_signal) == SIG_IGN)
         signal(SIGHUP, SIG_IGN);
@@ -459,18 +478,20 @@ setup_signals(void) {
 }
 
 static void
-checkpoint_timer(Timer_ID id, Timer_Data data) {
+checkpoint_timer(Timer_ID id, Timer_Data data)
+{
     checkpoint_requested = CHKPT_TIMER;
 }
 
 static void
-set_checkpoint_timer(int first_time) {
+set_checkpoint_timer(int first_time)
+{
     int interval, now = time(nullptr);
     static Timer_ID last_checkpoint_timer;
 
     interval = server_int_option("dump_interval", 3600);
     if (interval < 60 || now + interval < now) {
-        interval = 3600; /* Once per hour */
+        interval = 3600;    /* Once per hour */
     }
 
     if (!first_time)
@@ -478,9 +499,10 @@ set_checkpoint_timer(int first_time) {
     last_checkpoint_timer = set_timer(interval, checkpoint_timer, nullptr);
 }
 
-static const char*
-object_name(Objid oid) {
-    static Stream* s = nullptr;
+static const char *
+object_name(Objid oid)
+{
+    static Stream *s = nullptr;
 
     if (!s)
         s = new_stream(30);
@@ -494,27 +516,43 @@ object_name(Objid oid) {
 }
 
 static void
-call_notifier(Objid player, Objid handler, const char* verb_name) {
+call_notifier(Objid player, Objid handler, const char *verb_name)
+{
     Var args;
 
     args = new_list(1);
-    args.v.list[1].type = TYPE_OBJ;
-    args.v.list[1].v.obj = player;
+    args[1].type = TYPE_OBJ;
+    args[1].v.obj = player;
+
+    #ifdef MEMO_SIZE
+        var_metadata *metadata = ((var_metadata*)args.v.list) - 1;
+        metadata->size = 0; //metadata_old->size;
+    #endif
+
     run_server_task(player, Var::new_obj(handler), verb_name, args, "", nullptr);
 }
 
-int get_server_option(Objid oid, const char* name, Var* r) {
-    if (((valid(oid) && db_find_property(Var::new_obj(oid), "server_options", r).ptr) || (valid(SYSTEM_OBJECT) && db_find_property(Var::new_obj(SYSTEM_OBJECT), "server_options", r).ptr)) && r->type == TYPE_OBJ && valid(r->v.obj) && db_find_property(*r, name, r).ptr)
+int
+get_server_option(Objid oid, const char *name, Var * r)
+{
+    if (((valid(oid) &&
+            db_find_property(Var::new_obj(oid), "server_options", r).ptr)
+            || (valid(SYSTEM_OBJECT) &&
+                db_find_property(Var::new_obj(SYSTEM_OBJECT), "server_options", r).ptr))
+            && r->type == TYPE_OBJ
+            && valid(r->v.obj)
+            && db_find_property(*r, name, r).ptr)
         return 1;
 
     return 0;
 }
 
 static void
-send_message(Objid listener, network_handle nh, const char* msg_name, ...) {
+send_message(Objid listener, network_handle nh, const char *msg_name, ...)
+{
     va_list args;
     Var msg;
-    const char* line;
+    const char *line;
 
     va_start(args, msg_name);
     if (get_server_option(listener, msg_name, &msg)) {
@@ -523,12 +561,12 @@ send_message(Objid listener, network_handle nh, const char* msg_name, ...) {
         else if (msg.type == TYPE_LIST) {
             int i;
 
-            for (i = 1; i <= msg.v.list[0].v.num; i++)
-                if (msg.v.list[i].type == TYPE_STR)
-                    network_send_line(nh, msg.v.list[i].v.str, 1, 1);
+            for (i = 1; i <= msg.length(); i++)
+                if (msg[i].type == TYPE_STR)
+                    network_send_line(nh, msg[i].v.str, 1, 1);
         }
-    } else /* Use default message */
-        while ((line = va_arg(args, const char*)) != 0)
+    } else          /* Use default message */
+        while ((line = va_arg(args, const char *)) != 0)
             network_send_line(nh, line, 1, 1);
 
     va_end(args);
@@ -543,8 +581,9 @@ send_message(Objid listener, network_handle nh, const char* msg_name, ...) {
  * the list of roots.  After they are recycled, they are freed.
  */
 static int
-queue_includes(Var v) {
-    struct pending_recycle* head = pending_head;
+queue_includes(Var v)
+{
+    struct pending_recycle *head = pending_head;
 
     while (head) {
         if (head->v.v.anon == v.v.anon)
@@ -555,18 +594,20 @@ queue_includes(Var v) {
     return 0;
 }
 
-void queue_anonymous_object(Var v) {
+void
+queue_anonymous_object(Var v)
+{
     assert(TYPE_ANON == v.type);
     assert(!db_object_has_flag2(v, FLAG_RECYCLED));
     assert(!db_object_has_flag2(v, FLAG_INVALID));
     assert(!queue_includes(v));
 
     if (!pending_free) {
-        pending_free = (struct pending_recycle*)mymalloc(sizeof(struct pending_recycle), M_STRUCT);
+        pending_free = (struct pending_recycle *)mymalloc(sizeof(struct pending_recycle), M_STRUCT);
         pending_free->next = nullptr;
     }
 
-    struct pending_recycle* next = pending_free;
+    struct pending_recycle *next = pending_free;
     pending_free = next->next;
 
     next->v = var_ref(v);
@@ -580,7 +621,8 @@ void queue_anonymous_object(Var v) {
 }
 
 static void
-recycle_anonymous_objects(void) {
+recycle_anonymous_objects(void)
+{
     if (!pending_head)
         return;
 
@@ -622,18 +664,19 @@ recycle_anonymous_objects(void) {
 }
 
 static void
-recycle_waifs(void) {
+recycle_waifs(void)
+{
     /* This seems like a lot of work to go through just to get a destroy verb name.
      * Maybe it should just be a #define in waif.h? Ah well.*/
-    static char* waif_recycle_verb = nullptr;
+    static char *waif_recycle_verb = nullptr;
     if (!waif_recycle_verb) {
-        waif_recycle_verb = (char*)mymalloc(9, M_STRING);
+        waif_recycle_verb = (char *)mymalloc(9, M_STRING);
         waif_recycle_verb[0] = WAIF_VERB_PREFIX;
         strcpy(waif_recycle_verb + 1, "recycle");
     }
 
     std::vector<Waif*> removals;
-    for (auto& x : destroyed_waifs) {
+    for (auto &x : destroyed_waifs) {
         if (x.second == false) {
             run_server_task(-1, Var::new_waif(x.first), waif_recycle_verb, new_list(0), "", nullptr);
             x.second = true;
@@ -656,7 +699,9 @@ recycle_waifs(void) {
  * again.
  */
 
-void write_values_pending_finalization(void) {
+void
+write_values_pending_finalization(void)
+{
     /* In order to get an accurate count, we have to iterate through destroyed_waifs twice.
        The first time to ascertain which waifs haven't already had their recycle verb called,
        the second time to add them to the list. If this proves problematic, we might have to
@@ -665,20 +710,20 @@ void write_values_pending_finalization(void) {
        any impact whatsoever. */
 
     unsigned int pending_waif_count = 0;
-    for (auto& x : destroyed_waifs)
+    for (auto &x : destroyed_waifs)
         if (x.second == false)
             pending_waif_count++;
-
+    
     dbio_printf("%" PRIdN " values pending finalization\n", pending_count + pending_waif_count);
 
-    struct pending_recycle* head = pending_head;
+    struct pending_recycle *head = pending_head;
 
     while (head) {
         dbio_write_var(head->v);
         head = head->next;
     }
 
-    for (auto& x : destroyed_waifs) {
+    for (auto &x : destroyed_waifs) {
         if (x.second == false)
             dbio_write_var(Var::new_waif(x.first));
     }
@@ -692,7 +737,9 @@ void write_values_pending_finalization(void) {
  * just track them.
  */
 
-int read_values_pending_finalization(void) {
+int
+read_values_pending_finalization(void)
+{
     int i, count;
 
     if (dbio_scanf("%d values pending finalization\n", &count) != 1) {
@@ -704,46 +751,48 @@ int read_values_pending_finalization(void) {
     pending_list = new_list(count);
 
     for (i = 1; i <= count; i++) {
-        pending_list.v.list[i] = dbio_read_var();
+        pending_list[i] = dbio_read_var();
     }
 
     return 1;
 }
 
 static void
-main_loop(void) {
+main_loop(void)
+{
     int i;
 
     /* First, queue anonymous objects and WAIFs */
-    for (i = 1; i <= pending_list.v.list[0].v.num; i++) {
+    for (i = 1; i <= pending_list.length(); i++) {
         Var v;
 
-        v = pending_list.v.list[i];
+        v = pending_list[i];
 
         /* in theory this could be any value... */
         /* in practice this will be an anonymous object... */
         /*... until now! It can also be a WAIF. */
         assert(v.type == TYPE_ANON || v.type == TYPE_WAIF);
 
-        switch (v.type) {
-            case TYPE_ANON:
-                if (v.v.anon != nullptr)
-                    queue_anonymous_object(var_ref(v));
-                break;
-            case TYPE_WAIF:
-                if (v.v.waif != nullptr && destroyed_waifs.count(v.v.waif) == 0)
-                    destroyed_waifs[v.v.waif] = false;
+    switch (v.type) {
+        case TYPE_ANON:
+            if (v.v.anon != nullptr)
+                queue_anonymous_object(var_ref(v));
+            break;
+        case TYPE_WAIF:
+            if (v.v.waif != nullptr && destroyed_waifs.count(v.v.waif) == 0)
+                destroyed_waifs[v.v.waif] = false;
         }
     }
 
     free_var(pending_list);
 
     /* Second, notify DB of disconnections for all checkpointed connections */
-    for (i = 1; i <= checkpointed_connections.v.list[0].v.num; i++) {
+    for (i = 1; i <= checkpointed_connections.length(); i++) {
         Var v;
 
-        v = checkpointed_connections.v.list[i];
-        call_notifier(v.v.list[1].v.obj, v.v.list[2].v.obj, "user_disconnected");
+        v = checkpointed_connections[i];
+        call_notifier(v[1].v.obj, v[2].v.obj,
+                      "user_disconnected");
     }
     free_var(checkpointed_connections);
 
@@ -762,14 +811,15 @@ main_loop(void) {
         shandle *h, *nexth;
 
 #ifdef ENABLE_GC
-        if (gc_run_called || gc_roots_count > GC_ROOTS_LIMIT || checkpoint_requested != CHKPT_OFF)
+        if (gc_run_called || gc_roots_count > GC_ROOTS_LIMIT
+                || checkpoint_requested != CHKPT_OFF)
             gc_collect();
 #endif
 
         if (reopen_logfile_requested) {
             reopen_logfile_requested = false;
 
-            FILE* new_log;
+            FILE *new_log;
             oklog("LOGFILE: Closing due to remote request signal.\n");
 
             new_log = fopen(get_log_file_name(), "a");
@@ -786,7 +836,8 @@ main_loop(void) {
             if (checkpoint_requested == CHKPT_SIGNAL)
                 oklog("CHECKPOINTING due to remote request signal.\n");
             checkpoint_requested = CHKPT_OFF;
-            run_server_task(-1, Var::new_obj(SYSTEM_OBJECT), "checkpoint_started", new_list(0), "", nullptr);
+            run_server_task(-1, Var::new_obj(SYSTEM_OBJECT), "checkpoint_started",
+                            new_list(0), "", nullptr);
             network_process_io(0);
 #ifdef UNFORKED_CHECKPOINTS
             call_checkpoint_notifier(db_flush(FLUSH_ALL_NOW));
@@ -813,18 +864,26 @@ main_loop(void) {
         /* If a exec'd child process exited, deal with it here */
         deal_with_child_exit();
 
-        { /* Get rid of old un-logged-in or useless connections */
+        {   /* Get rid of old un-logged-in or useless connections */
             int now = time(nullptr);
 
+            all_shandles_mutex.lock();
             for (h = all_shandles; h; h = nexth) {
                 Var v;
 
                 nexth = h->next;
 
-                if (nhandle_refcount(h->nhandle) > 1)
-                    continue;
+                /* If the nhandle refcount is > 1, a background thread is working with it.
+                 * We don't want to mess with it until that thread is finished. */
+                if (get_nhandle_refcount(h->nhandle) > 1)
+                  continue;
 
-                if (!h->outbound && h->connection_time == 0 && (get_server_option(h->listener, "connect_timeout", &v) ? (v.type == TYPE_INT && v.v.num > 0 && now - h->last_activity_time > v.v.num) : (now - h->last_activity_time > DEFAULT_CONNECT_TIMEOUT))) {
+                if (!h->outbound && h->connection_time == 0
+                        && (get_server_option(h->listener, "connect_timeout", &v)
+                            ? (v.type == TYPE_INT && v.v.num > 0
+                               && now - h->last_activity_time > v.v.num)
+                            : (now - h->last_activity_time
+                               > DEFAULT_CONNECT_TIMEOUT))) {
                     call_notifier(h->player, h->listener, "user_disconnected");
                     lock_connection_name_mutex(h->nhandle);
                     oklog("TIMEOUT: #%" PRIdN " on %s\n",
@@ -832,7 +891,9 @@ main_loop(void) {
                           network_connection_name(h->nhandle));
                     unlock_connection_name_mutex(h->nhandle);
                     if (h->print_messages)
-                        send_message(h->listener, h->nhandle, "timeout_msg", "*** Timed-out waiting for login. ***", 0);
+                        send_message(h->listener, h->nhandle, "timeout_msg",
+                                     "*** Timed-out waiting for login. ***",
+                                     0);
                     network_close(h->nhandle);
                     free_shandle(h);
                 } else if (h->connection_time != 0 && !valid(h->player)) {
@@ -842,18 +903,21 @@ main_loop(void) {
                           network_connection_name(h->nhandle));
                     unlock_connection_name_mutex(h->nhandle);
                     if (h->print_messages)
-                        send_message(h->listener, h->nhandle, "recycle_msg", "*** Recycled ***", 0);
+                        send_message(h->listener, h->nhandle,
+                                     "recycle_msg", "*** Recycled ***", 0);
                     network_close(h->nhandle);
                     free_shandle(h);
-                } else if (h->disconnect_me.load()) {
-                    call_notifier(h->player, h->listener, "user_disconnected");
+                } else if (h->disconnect_me) {
+                    call_notifier(h->player, h->listener,
+                                  "user_disconnected");
                     lock_connection_name_mutex(h->nhandle);
                     oklog("DISCONNECTED: %s on %s\n",
                           object_name(h->player),
                           network_connection_name(h->nhandle));
                     unlock_connection_name_mutex(h->nhandle);
                     if (h->print_messages)
-                        send_message(h->listener, h->nhandle, "boot_msg", "*** Disconnected ***", 0);
+                        send_message(h->listener, h->nhandle, "boot_msg",
+                                     "*** Disconnected ***", 0);
                     network_close(h->nhandle);
                     free_shandle(h);
                 } else if (h->switched) {
@@ -864,6 +928,7 @@ main_loop(void) {
                     h->switched = 0;
                 }
             }
+            all_shandles_mutex.unlock();
         }
     }
 
@@ -871,9 +936,12 @@ main_loop(void) {
     send_shutdown_message(shutdown_message.str().c_str());
 }
 
-static shandle*
-find_shandle(Objid player) {
-    shandle* h;
+static shandle *
+find_shandle(Objid player)
+{
+    shandle *h;
+
+    std::lock_guard<std::recursive_mutex> lock(all_shandles_mutex);
 
     for (h = all_shandles; h; h = h->next)
         if (h->player == player)
@@ -882,12 +950,13 @@ find_shandle(Objid player) {
     return nullptr;
 }
 
-static char* cmdline_buffer;
+static char *cmdline_buffer;
 static int cmdline_buflen;
 
 static void
-init_cmdline(int argc, char* argv[]) {
-    char* p;
+init_cmdline(int argc, char *argv[])
+{
+    char *p;
     int i;
 
     for (p = argv[0], i = 1;;) {
@@ -899,39 +968,45 @@ init_cmdline(int argc, char* argv[]) {
     cmdline_buflen = p - argv[0];
 }
 
-#define SERVER_CO_TABLE(DEFINE, H, VALUE, _)                  \
-    DEFINE(binary, _, TYPE_INT, num, H->binary, {             \
-        H->binary = is_true(VALUE);                           \
-        network_set_connection_binary(H->nhandle, H->binary); \
-    })
+#define SERVER_CO_TABLE(DEFINE, H, VALUE, _)                             \
+    DEFINE(binary, _, TYPE_INT, num,                                     \
+           H->binary,                                                    \
+           {                                                             \
+                H->binary = is_true(VALUE);                              \
+                network_set_connection_binary(H->nhandle, H->binary);    \
+           })                                                            \
 
 static int
-server_set_connection_option(shandle* h, const char* option, Var value) {
+server_set_connection_option(shandle * h, const char *option, Var value)
+{
     CONNECTION_OPTION_SET(SERVER_CO_TABLE, h, option, value);
 }
 
 static int
-server_connection_option(shandle* h, const char* option, Var* value) {
+server_connection_option(shandle * h, const char *option, Var * value)
+{
     CONNECTION_OPTION_GET(SERVER_CO_TABLE, h, option, value);
 }
 
 static Var
-server_connection_options(shandle* h, Var list) {
+server_connection_options(shandle * h, Var list)
+{
     CONNECTION_OPTION_LIST(SERVER_CO_TABLE, h, list);
 }
 
 #undef SERVER_CO_TABLE
 
-static const char*
-read_stdin_line(const char* prompt) {
-    static Stream* s = nullptr;
+static const char *
+read_stdin_line(const char *prompt)
+{
+    static Stream *s = nullptr;
 
     if (!s)
         s = new_stream(100);
 
     fflush(stdout);
 
-    char* line;
+    char *line;
 
     if ((line = linenoise(prompt)) && *line) {
         linenoiseHistoryAdd(line);
@@ -940,21 +1015,23 @@ read_stdin_line(const char* prompt) {
         return reset_stream(s);
     }
 
-    return (char*)"";
+    return (char *)"";
 }
 
 static void
-emergency_notify(Objid player, const char* line) {
+emergency_notify(Objid player, const char *line)
+{
     printf("#%" PRIdN " <- %s\n", player, line);
 }
 
 static int
-emergency_mode() {
-    const char* line;
+emergency_mode()
+{
+    const char *line;
     Var words;
     int nargs;
-    const char* command;
-    Stream* s = new_stream(100);
+    const char *command;
+    Stream *s = new_stream(100);
     Objid wizard = -1;
     int debug = 1;
     int start_ok = -1;
@@ -999,10 +1076,10 @@ emergency_mode() {
         line = read_stdin_line(prompt);
 
         if (!line)
-            start_ok = 0;        /* treat EOF as "quit" */
-        else if (*line == ';') { /* eval command */
+            start_ok = 0;   /* treat EOF as "quit" */
+        else if (*line == ';') {    /* eval command */
             Var code, errors;
-            Program* program;
+            Program *program;
             Var str;
 
             str.type = TYPE_STR;
@@ -1018,7 +1095,7 @@ emergency_mode() {
             while (*line == ' ')
                 line++;
 
-            if (*line == '\0') { /* long form */
+            if (*line == '\0') {    /* long form */
                 printf("Type one or more lines of code, ending with `.' ");
                 printf("alone on a line.\n");
                 for (;;) {
@@ -1042,7 +1119,11 @@ emergency_mode() {
             if (program) {
                 Var result;
 
-                switch (run_server_program_task(NOTHING, "emergency_mode", new_list(0), NOTHING, "emergency_mode", program, wizard, debug, wizard, "", &result)) {
+                switch (run_server_program_task(NOTHING, "emergency_mode",
+                                                new_list(0), NOTHING,
+                                                "emergency_mode", program,
+                                                wizard, debug, wizard, "",
+                                                &result)) {
                     case OUTCOME_DONE:
                         unparse_value(s, result);
                         printf("=> %s\n", reset_stream(s));
@@ -1060,29 +1141,32 @@ emergency_mode() {
                 int i;
 
                 printf("** %" PRIdN " errors during parsing:\n",
-                       errors.v.list[0].v.num);
-                for (i = 1; i <= errors.v.list[0].v.num; i++)
-                    printf("  %s\n", errors.v.list[i].v.str);
+                       errors.length());
+                for (i = 1; i <= errors.length(); i++)
+                    printf("  %s\n", errors[i].v.str);
             }
             free_var(errors);
         } else {
             words = parse_into_wordlist(line);
-            nargs = words.v.list[0].v.num - 1;
+            nargs = words.length() - 1;
             if (nargs < 0)
                 continue;
-            command = words.v.list[1].v.str;
+            command = words[1].v.str;
 
-            if ((!strcasecmp(command, "program") || !strcasecmp(command, ".program")) && nargs == 1) {
-                const char* verbref = words.v.list[2].v.str;
+            if ((!strcasecmp(command, "program")
+                    || !strcasecmp(command, ".program"))
+                    && nargs == 1) {
+                const char *verbref = words[2].v.str;
                 db_verb_handle h;
                 const char *message, *vname;
 
-                h = find_verb_for_programming(wizard, verbref, &message, &vname);
+                h = find_verb_for_programming(wizard, verbref,
+                                              &message, &vname);
                 printf("%s\n", message);
                 if (h.ptr) {
                     Var code, str, errors;
-                    const char* line;
-                    Program* program;
+                    const char *line;
+                    Program *program;
 
                     code = new_list(0);
                     str.type = TYPE_STR;
@@ -1100,9 +1184,9 @@ emergency_mode() {
                         int i;
 
                         printf("** %" PRIdN " errors during parsing:\n",
-                               errors.v.list[0].v.num);
-                        for (i = 1; i <= errors.v.list[0].v.num; i++)
-                            printf("  %s\n", errors.v.list[i].v.str);
+                               errors.length());
+                        for (i = 1; i <= errors.length(); i++)
+                            printf("  %s\n", errors[i].v.str);
                         printf("Verb not programmed.\n");
                     }
 
@@ -1110,21 +1194,24 @@ emergency_mode() {
                     free_var(errors);
                 }
             } else if (!strcasecmp(command, "list") && nargs == 1) {
-                const char* verbref = words.v.list[2].v.str;
+                const char *verbref = words[2].v.str;
                 db_verb_handle h;
                 const char *message, *vname;
 
-                h = find_verb_for_programming(wizard, verbref, &message, &vname);
+                h = find_verb_for_programming(wizard, verbref,
+                                              &message, &vname);
                 if (h.ptr)
-                    unparse_to_file(stdout, db_verb_program(h), 0, 1, MAIN_VECTOR);
+                    unparse_to_file(stdout, db_verb_program(h), 0, 1,
+                                    MAIN_VECTOR);
                 else
                     printf("%s\n", message);
             } else if (!strcasecmp(command, "disassemble") && nargs == 1) {
-                const char* verbref = words.v.list[2].v.str;
+                const char *verbref = words[2].v.str;
                 db_verb_handle h;
                 const char *message, *vname;
 
-                h = find_verb_for_programming(wizard, verbref, &message, &vname);
+                h = find_verb_for_programming(wizard, verbref,
+                                              &message, &vname);
                 if (h.ptr)
                     disassemble_to_file(stdout, db_verb_program(h));
                 else
@@ -1138,51 +1225,38 @@ emergency_mode() {
                 start_ok = 1;
             } else if (!strcasecmp(command, "debug") && nargs == 0) {
                 debug = !debug;
-            } else if (!strcasecmp(command, "wizard") && nargs == 1 && sscanf(words.v.list[2].v.str, "#%" PRIdN, &wizard) == 1) {
+            } else if (!strcasecmp(command, "wizard") && nargs == 1
+                       && sscanf(words[2].v.str, "#%" PRIdN, &wizard) == 1) {
                 printf("** Switching to wizard #%" PRIdN "...\n", wizard);
             } else if (!strcasecmp(command, "help") || !strcasecmp(command, "?")) {
-                printf(
-                    ";EXPR                 "
-                    "Evaluate MOO expression, print result.\n");
-                printf(
-                    ";;CODE                "
-                    "Execute whole MOO verb, print result.\n");
-                printf(
-                    "    (For above, omitting EXPR or CODE lets you "
-                    "enter several lines\n");
-                printf(
-                    "     of input at once; type a period alone on a "
-                    "line to finish.)\n");
-                printf(
-                    "program OBJ:VERB      "
-                    "Set the MOO code of an existing verb.\n");
-                printf(
-                    "list OBJ:VERB         "
-                    "List the MOO code of an existing verb.\n");
-                printf(
-                    "disassemble OBJ:VERB  "
-                    "List the internal form of an existing verb.\n");
-                printf(
-                    "debug                 "
-                    "Toggle evaluation with(out) `d' bit.\n");
-                printf(
-                    "wizard #XX            "
-                    "Execute future commands as wizard #XX.\n");
-                printf(
-                    "continue              "
-                    "End emergency mode, continue start-up.\n");
-                printf(
-                    "quit                  "
-                    "Exit server normally, saving database.\n");
-                printf(
-                    "abort                 "
-                    "Exit server *without* saving database.\n");
-                printf(
-                    "help, ?               "
-                    "Print this text.\n\n");
-                printf(
-                    "NOTE: *NO* forked or suspended tasks will run "
-                    "until you exit this mode.\n\n");
+                printf(";EXPR                 "
+                       "Evaluate MOO expression, print result.\n");
+                printf(";;CODE                "
+                       "Execute whole MOO verb, print result.\n");
+                printf("    (For above, omitting EXPR or CODE lets you "
+                       "enter several lines\n");
+                printf("     of input at once; type a period alone on a "
+                       "line to finish.)\n");
+                printf("program OBJ:VERB      "
+                       "Set the MOO code of an existing verb.\n");
+                printf("list OBJ:VERB         "
+                       "List the MOO code of an existing verb.\n");
+                printf("disassemble OBJ:VERB  "
+                       "List the internal form of an existing verb.\n");
+                printf("debug                 "
+                       "Toggle evaluation with(out) `d' bit.\n");
+                printf("wizard #XX            "
+                       "Execute future commands as wizard #XX.\n");
+                printf("continue              "
+                       "End emergency mode, continue start-up.\n");
+                printf("quit                  "
+                       "Exit server normally, saving database.\n");
+                printf("abort                 "
+                       "Exit server *without* saving database.\n");
+                printf("help, ?               "
+                       "Print this text.\n\n");
+                printf("NOTE: *NO* forked or suspended tasks will run "
+                       "until you exit this mode.\n\n");
             } else {
                 printf("** Unknown or malformed command.\n");
             }
@@ -1202,15 +1276,13 @@ emergency_mode() {
 }
 
 static void
-run_do_start_script(Var code) {
-    Stream* s = new_stream(100);
+run_do_start_script(Var code)
+{
+    Stream *s = new_stream(100);
     Var result;
 
     switch (run_server_task(NOTHING,
-                            Var::new_obj(SYSTEM_OBJECT),
-                            "do_start_script",
-                            code,
-                            "",
+                            Var::new_obj(SYSTEM_OBJECT), "do_start_script", code, "",
                             &result)) {
         case OUTCOME_DONE:
             unparse_value(s, result);
@@ -1229,7 +1301,8 @@ run_do_start_script(Var code) {
 }
 
 static void
-do_script_line(const char* line) {
+do_script_line(const char *line)
+{
     Var str;
     Var code = new_list(0);
 
@@ -1240,7 +1313,8 @@ do_script_line(const char* line) {
 }
 
 static void
-do_script_file(const char* path) {
+do_script_file(const char *path)
+{
     Var str;
     Var code = new_list(0);
 
@@ -1265,7 +1339,8 @@ do_script_file(const char* path) {
 }
 
 static void
-init_random(void) {
+init_random(void)
+{
     long seed;
     unsigned char soskey[32];
 
@@ -1304,7 +1379,7 @@ init_random(void) {
 
     sosemanuk_init(&run_context, &key_context, nullptr, 0);
 
-    sosemanuk_prng(&run_context, (unsigned char*)&seed, sizeof(seed));
+    sosemanuk_prng(&run_context, (unsigned char *)&seed, sizeof(seed));
 
     SRANDOM(seed);
 }
@@ -1313,7 +1388,9 @@ init_random(void) {
  * Exported interface
  */
 
-void set_server_cmdline(const char* line) {
+void
+set_server_cmdline(const char *line)
+{
     /* This technique works for all UNIX systems I've seen on which this is
      * possible to do at all, and it's safe on all systems.  The only systems
      * I know of where this doesn't work run System V Release 4, on which the
@@ -1327,14 +1404,16 @@ void set_server_cmdline(const char* line) {
     while (*line && p < e)
         *p++ = *line++;
     while (p < e)
-        *p++ = ' '; /* Pad with blanks, not nulls; on SunOS and
-                     * maybe other systems, nulls would confuse
-                     * `ps'.  (*sigh*)
-                     */
+        *p++ = ' ';     /* Pad with blanks, not nulls; on SunOS and
+                 * maybe other systems, nulls would confuse
+                 * `ps'.  (*sigh*)
+                 */
     *e = '\0';
 }
 
-int server_flag_option(const char* name, int defallt) {
+int
+server_flag_option(const char *name, int defallt)
+{
     Var v;
 
     if (get_server_option(SYSTEM_OBJECT, name, &v))
@@ -1343,7 +1422,9 @@ int server_flag_option(const char* name, int defallt) {
         return defallt;
 }
 
-int server_int_option(const char* name, int defallt) {
+int
+server_int_option(const char *name, int defallt)
+{
     Var v;
 
     if (get_server_option(SYSTEM_OBJECT, name, &v))
@@ -1353,7 +1434,8 @@ int server_int_option(const char* name, int defallt) {
 }
 
 double
-server_float_option(const char* name, double defallt) {
+server_float_option(const char *name, double defallt)
+{
     Var v;
 
     if (get_server_option(SYSTEM_OBJECT, name, &v))
@@ -1362,8 +1444,9 @@ server_float_option(const char* name, double defallt) {
         return defallt;
 }
 
-const char*
-server_string_option(const char* name, const char* defallt) {
+const char *
+server_string_option(const char *name, const char *defallt)
+{
     Var v;
 
     if (get_server_option(SYSTEM_OBJECT, name, &v))
@@ -1375,10 +1458,13 @@ server_string_option(const char* name, const char* defallt) {
 static Objid next_unconnected_player = NOTHING - 1;
 
 server_handle
-server_new_connection(server_listener sl, network_handle nh, bool outbound) {
-    slistener* l = (slistener*)sl.ptr;
-    shandle* h = (shandle*)mymalloc(sizeof(shandle), M_NETWORK);
+server_new_connection(server_listener sl, network_handle nh, bool outbound)
+{
+    slistener *l = (slistener *)sl.ptr;
+    shandle *h = (shandle *)mymalloc(sizeof(shandle), M_NETWORK);
     server_handle result;
+
+    all_shandles_mutex.lock();
 
     h->next = all_shandles;
     h->prev = &all_shandles;
@@ -1398,6 +1484,8 @@ server_new_connection(server_listener sl, network_handle nh, bool outbound) {
     h->binary = false;
     h->print_messages = l ? l->print_messages : !outbound;
 
+    all_shandles_mutex.unlock();
+
     if (l || !outbound) {
         new_input_task(h->tasks, "", 0, 0);
         /*
@@ -1410,25 +1498,29 @@ server_new_connection(server_listener sl, network_handle nh, bool outbound) {
     }
 
     lock_connection_name_mutex(nh);
-    const char* connection_name = str_dup(network_connection_name(nh));
-    unlock_connection_name_mutex(nh);
 
     if (outbound) {
-        oklog("CONNECT: #%" PRIdN " to %s [%s], port %i\n", h->player, connection_name, network_ip_address(nh), network_port(nh));
+        oklog("CONNECT: #%" PRIdN " to %s [%s], port %i\n", h->player,
+              network_connection_name(nh), network_ip_address(nh), network_port(nh));
     } else {
-        oklog("ACCEPT: #%" PRIdN " on %s [%s], port %i from %s [%s], port %i\n", h->player, network_source_connection_name(nh), network_source_ip_address(nh), network_source_port(nh), connection_name, network_ip_address(nh), network_port(nh));
+        oklog("ACCEPT: #%" PRIdN " on %s [%s], port %i from %s [%s], port %i\n", h->player,
+              network_source_connection_name(nh), network_source_ip_address(nh),
+              network_source_port(nh), network_connection_name(nh),
+              network_ip_address(nh), network_port(nh));
     }
-    free_str(connection_name);
+
+    unlock_connection_name_mutex(nh);
+
     result.ptr = h;
     return result;
 }
 
-void server_refuse_connection(server_listener sl, network_handle nh) {
-    slistener* l = (slistener*)sl.ptr;
+void
+server_refuse_connection(server_listener sl, network_handle nh)
+{
+    slistener *l = (slistener *)sl.ptr;
 
     lock_connection_name_mutex(nh);
-    const char* connection_name = str_dup(network_connection_name(nh));
-    unlock_connection_name_mutex(nh);
 
     if (l->print_messages)
         send_message(l->oid, nh, "server_full_msg",
@@ -1438,25 +1530,26 @@ void server_refuse_connection(server_listener sl, network_handle nh) {
                      0);
 
     errlog("SERVER FULL: refusing connection on %s [%s], port %i from %s [%s], port %i\n",
-           network_source_connection_name(nh),
-           network_source_ip_address(nh),
-           network_source_port(nh),
-           connection_name,
-           network_ip_address(nh),
-           network_port(nh));
+           network_source_connection_name(nh), network_source_ip_address(nh),
+           network_source_port(nh), network_connection_name(nh),
+           network_ip_address(nh), network_port(nh));
 
-    free_str(connection_name);
+    unlock_connection_name_mutex(nh);
 }
 
-void server_receive_line(server_handle sh, const char* line, bool out_of_band) {
-    shandle* h = (shandle*)sh.ptr;
+void
+server_receive_line(server_handle sh, const char *line, bool out_of_band)
+{
+    shandle *h = (shandle *) sh.ptr;
 
     h->last_activity_time = time(nullptr);
     new_input_task(h->tasks, line, h->binary, out_of_band);
 }
 
-void server_close(server_handle sh) {
-    shandle* h = (shandle*)sh.ptr;
+void
+server_close(server_handle sh)
+{
+    shandle *h = (shandle *) sh.ptr;
 
     lock_connection_name_mutex(h->nhandle);
 
@@ -1470,35 +1563,57 @@ void server_close(server_handle sh) {
     free_shandle(h);
 }
 
-void server_suspend_input(Objid connection) {
-    shandle* h = find_shandle(connection);
+void
+server_suspend_input(Objid connection)
+{
+    shandle *h = find_shandle(connection);
 
     network_suspend_input(h->nhandle);
 }
 
-void server_resume_input(Objid connection) {
-    shandle* h = find_shandle(connection);
+void
+server_resume_input(Objid connection)
+{
+    shandle *h = find_shandle(connection);
 
     network_resume_input(h->nhandle);
 }
 
-bool is_localhost(Objid connection) {
-    shandle* existing_h = find_shandle(connection);
-    if (!existing_h)
+bool
+is_trusted_proxy(Objid connection)
+{
+    shandle *existing_h = find_shandle(connection);
+    Var proxies;
+
+    if (!existing_h) {
         return false;
-    else
-        return network_is_localhost(existing_h->nhandle);
+    } else if (!get_server_option(existing_h->listener, "trusted_proxies", &proxies) || proxies.type != TYPE_LIST) {
+        return false;
+    } else {
+        
+        int i;
+        const char *ip = network_ip_address(existing_h->nhandle);
+
+        for (i = 1; i <= proxies.length(); i++) {
+            if (proxies[i].type == TYPE_STR && strcmp(ip, proxies[i].v.str) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
-int proxy_connected(Objid connection, char* command) {
-    shandle* existing_h = find_shandle(connection);
+int
+proxy_connected(Objid connection, char *command)
+{
+    shandle *existing_h = find_shandle(connection);
     int ret = 0;
     if (existing_h) {
         applog(LOG_INFO3, "PROXY: Proxy command detected: %s\n", command);
         char *source, *destination = nullptr;
-        char* source_port = nullptr;
-        char* destination_port = nullptr;
-        char* split = strtok(command, " ");
+        char *source_port = nullptr;
+        char *destination_port = nullptr;
+        char *split = strtok(command, " ");
 
         int x = 0;
         for (x = 1; x <= 6; x++) {
@@ -1509,16 +1624,16 @@ int proxy_connected(Objid connection, char* command) {
             }
             switch (x) {
                 case 3:
-                    source = split;  // local interface
+                    source = split;        // local interface
                     break;
                 case 4:
-                    destination = split;  // incoming connection IP
+                    destination = split;             // incoming connection IP
                     break;
                 case 5:
-                    destination_port = split;  // incoming connection port
+                    destination_port = split;        // incoming connection port
                     break;
                 case 6:
-                    source_port = split;  // local port
+                    source_port = split;   // local port
                     break;
                 default:
                     break;
@@ -1526,9 +1641,9 @@ int proxy_connected(Objid connection, char* command) {
             split = strtok(nullptr, " ");
         }
         lock_connection_name_mutex(existing_h->nhandle);
-        const char* old_name = str_dup(network_connection_name(existing_h->nhandle));  // rewrite is going to free this
+        const char *old_name = str_dup(network_connection_name(existing_h->nhandle));   // rewrite is going to free this
         unlock_connection_name_mutex(existing_h->nhandle);
-
+        
         int rw = rewrite_connection_name(existing_h->nhandle, destination, destination_port, source, source_port);
         if (rw != 0) {
             errlog("PROXY: Proxy rewrite failed.\n");
@@ -1545,9 +1660,11 @@ int proxy_connected(Objid connection, char* command) {
     return ret;
 }
 
-void player_connected(Objid old_id, Objid new_id, bool is_newly_created) {
-    shandle* existing_h = find_shandle(new_id);
-    shandle* new_h = find_shandle(old_id);
+void
+player_connected(Objid old_id, Objid new_id, bool is_newly_created)
+{
+    shandle *existing_h = find_shandle(new_id);
+    shandle *new_h = find_shandle(old_id);
 
     if (!new_h)
         panic_moo("Non-existent shandle connected");
@@ -1562,50 +1679,60 @@ void player_connected(Objid old_id, Objid new_id, bool is_newly_created) {
          * latter only needs listener value.
          */
         Objid existing_listener = existing_h->listener;
+        
+        lock_connection_name_mutex(existing_h->nhandle);
         lock_connection_name_mutex(new_h->nhandle);
-        char* name1 = str_dup(network_connection_name(existing_h->nhandle));
         oklog("REDIRECTED: %s, was %s, now %s\n",
               object_name(new_id),
-              name1,
+              network_connection_name(existing_h->nhandle),
               network_connection_name(new_h->nhandle));
         unlock_connection_name_mutex(new_h->nhandle);
-        free_str(name1);
+        unlock_connection_name_mutex(existing_h->nhandle);
         if (existing_h->print_messages)
-            send_message(existing_listener, existing_h->nhandle, "redirect_from_msg", "*** Redirecting connection to new port ***", 0);
+            send_message(existing_listener, existing_h->nhandle,
+                         "redirect_from_msg",
+                         "*** Redirecting connection to new port ***", 0);
         if (new_h->print_messages)
-            send_message(new_h->listener, new_h->nhandle, "redirect_to_msg", "*** Redirecting old connection to this port ***", 0);
+            send_message(new_h->listener, new_h->nhandle, "redirect_to_msg",
+                         "*** Redirecting old connection to this port ***", 0);
         network_close(existing_h->nhandle);
         free_shandle(existing_h);
         if (existing_listener == new_h->listener)
             call_notifier(new_id, new_h->listener, "user_reconnected");
         else {
             new_h->disconnect_me = true;
-            call_notifier(new_id, existing_listener, "user_client_disconnected");
+            call_notifier(new_id, existing_listener,
+                          "user_client_disconnected");
             new_h->disconnect_me = false;
             call_notifier(new_id, new_h->listener, "user_connected");
         }
     } else {
-        char* full_conn_name = full_network_connection_name(new_h->nhandle);
+        lock_connection_name_mutex(new_h->nhandle);
         oklog("%s: %s on %s\n",
               is_newly_created ? "CREATED" : "CONNECTED",
               object_name(new_h->player),
-              full_conn_name);
-        free(full_conn_name);
+              full_network_connection_name(new_h->nhandle));
+        unlock_connection_name_mutex(new_h->nhandle);
         if (new_h->print_messages) {
             if (is_newly_created)
-                send_message(new_h->listener, new_h->nhandle, "create_msg", "*** Created ***", 0);
+                send_message(new_h->listener, new_h->nhandle, "create_msg",
+                             "*** Created ***", 0);
             else
-                send_message(new_h->listener, new_h->nhandle, "connect_msg", "*** Connected ***", 0);
+                send_message(new_h->listener, new_h->nhandle, "connect_msg",
+                             "*** Connected ***", 0);
         }
-        call_notifier(new_id, new_h->listener, is_newly_created ? "user_created" : "user_connected");
+        call_notifier(new_id, new_h->listener,
+                      is_newly_created ? "user_created" : "user_connected");
     }
 }
 
-void player_switched(Objid old_id, Objid new_id, bool silent) {
-    const char* old_name = str_dup(object_name(old_id));
-    shandle* existing_h = find_shandle(new_id);
-    shandle* new_h = find_shandle(old_id);
-    const char* status = nullptr;
+void
+player_switched(Objid old_id, Objid new_id, bool silent)
+{
+    const char *old_name = str_dup(object_name(old_id));
+    shandle *existing_h = find_shandle(new_id);
+    shandle *new_h = find_shandle(old_id);
+    const char *status = nullptr;
 
     if (!new_h)
         panic_moo("Non-existent shandle connected");
@@ -1618,14 +1745,18 @@ void player_switched(Objid old_id, Objid new_id, bool silent) {
         status = "REDIRECTED:";
         new_h->switched = new_id;
         if (!silent && existing_h->print_messages)
-            send_message(existing_h->listener, existing_h->nhandle, "redirect_from_msg", "*** Redirecting connection to new port ***", 0);
+            send_message(existing_h->listener, existing_h->nhandle,
+                         "redirect_from_msg",
+                         "*** Redirecting connection to new port ***", 0);
         if (!silent && new_h->print_messages)
-            send_message(new_h->listener, new_h->nhandle, "redirect_to_msg", "*** Redirecting old connection to this port ***", 0);
+            send_message(new_h->listener, new_h->nhandle, "redirect_to_msg",
+                         "*** Redirecting old connection to this port ***", 0);
         network_close(existing_h->nhandle);
         free_shandle(existing_h);
     } else {
         if (!silent && new_h->print_messages)
-            send_message(new_h->listener, new_h->nhandle, "connect_msg", "*** Connected ***", 0);
+            send_message(new_h->listener, new_h->nhandle, "connect_msg",
+                         "*** Connected ***", 0);
         status = old_id < 0 ? "CONNECTED:" : "SWITCHED:";
     }
     lock_connection_name_mutex(new_h->nhandle);
@@ -1638,13 +1769,17 @@ void player_switched(Objid old_id, Objid new_id, bool silent) {
     free_str(old_name);
 }
 
-int is_player_connected(Objid player) {
-    shandle* h = find_shandle(player);
+int
+is_player_connected(Objid player)
+{
+    shandle *h = find_shandle(player);
     return !h || h->disconnect_me.load() ? 0 : 1;
 }
 
-void notify(Objid player, const char* message) {
-    shandle* h = find_shandle(player);
+void
+notify(Objid player, const char *message)
+{
+    shandle *h = find_shandle(player);
 
     if (h && !h->disconnect_me.load())
         network_send_line(h->nhandle, message, 1, 1);
@@ -1652,16 +1787,22 @@ void notify(Objid player, const char* message) {
         emergency_notify(player, message);
 }
 
-void boot_player(Objid player) {
-    shandle* h = find_shandle(player);
+void
+boot_player(Objid player)
+{
+    shandle *h = find_shandle(player);
 
     if (h)
         h->disconnect_me = true;
 }
 
-void write_active_connections(void) {
+void
+write_active_connections(void)
+{
     int count = 0;
-    shandle* h;
+    shandle *h;
+
+    all_shandles_mutex.lock();
 
     for (h = all_shandles; h; h = h->next)
         count++;
@@ -1670,14 +1811,18 @@ void write_active_connections(void) {
 
     for (h = all_shandles; h; h = h->next)
         dbio_printf("%" PRIdN " %" PRIdN "\n", h->player, h->listener);
+        
+    all_shandles_mutex.unlock();
 }
 
-int read_active_connections(void) {
+int
+read_active_connections(void)
+{
     int count, i, have_listeners = 0;
     char c;
 
     i = dbio_scanf("%d active connections%c", &count, &c);
-    if (i == EOF) { /* older database format */
+    if (i == EOF) {     /* older database format */
         checkpointed_connections = new_list(0);
         return 1;
     } else if (i != 2) {
@@ -1699,7 +1844,7 @@ int read_active_connections(void) {
         Var v;
 
         if (have_listeners) {
-            if (dbio_scanf("%d %d\n", &who, &listener) != 2) {
+            if (dbio_scanf("%" SCNdN "%" SCNdN "\n", &who, &listener) != 2) {
                 errlog("READ_ACTIVE_CONNECTIONS: Bad conn/listener pair.\n");
                 return 0;
             }
@@ -1707,17 +1852,19 @@ int read_active_connections(void) {
             who = dbio_read_num();
             listener = SYSTEM_OBJECT;
         }
-        checkpointed_connections.v.list[i] = v = new_list(2);
-        v.v.list[1].type = v.v.list[2].type = TYPE_OBJ;
-        v.v.list[1].v.obj = who;
-        v.v.list[2].v.obj = listener;
+        checkpointed_connections[i] = v = new_list(2);
+        v[1].type = v[2].type = TYPE_OBJ;
+        v[1].v.obj = who;
+        v[2].v.obj = listener;
     }
 
     return 1;
 }
 
-int find_network_handle(Objid obj, network_handle** handle) {
-    shandle* h = find_shandle(obj);
+int
+find_network_handle(Objid obj, network_handle **handle)
+{
+    shandle *h = find_shandle(obj);
 
     if (!h || h->disconnect_me.load())
         return -1;
@@ -1728,7 +1875,8 @@ int find_network_handle(Objid obj, network_handle** handle) {
 }
 
 static void
-set_system_object_integer_limits() {
+set_system_object_integer_limits()
+{
     if (!valid(SYSTEM_OBJECT))
         return;
 
@@ -1742,10 +1890,14 @@ set_system_object_integer_limits() {
     h = db_find_property(Var::new_obj(SYSTEM_OBJECT), "minint", &value);
     if (h.ptr)
         db_set_property_value(h, Var::new_int(MININT));
+
 }
 
-void print_usage() {
-    fprintf(stderr, "Usage:\n  %s [-e] [-f script-file] [-c script-line] [-l log-file] [-m] [-w waif-type] [-O|-o] [-4 ipv4-address] [-6 ipv6-address] [-r certificate-path] [-k key-path] [-i files-path] [-x executables-path] %s [-t|-p port-number]\n", this_program, db_usage_string());
+void
+print_usage()
+{
+    fprintf(stderr, "Usage:\n  %s [-e] [-f script-file] [-c script-line] [-l log-file] [-m] [-w waif-type] [-O|-o] [-4 ipv4-address] [-6 ipv6-address] [-r certificate-path] [-k key-path] [-i files-path] [-x executables-path] %s [-t|-p port-number]\n",
+            this_program, db_usage_string());
     fprintf(stderr, "\nMETA OPTIONS\n");
     fprintf(stderr, "  %-20s %s\n", "-v, --version", "current version");
     fprintf(stderr, "  %-20s %s\n", "-h, --help", "show usage information and command-line options");
@@ -1763,6 +1915,7 @@ void print_usage() {
     fprintf(stderr, "\nNETWORKING OPTIONS\n");
     fprintf(stderr, "  %-20s %s\n", "-o, --outbound", "enable outbound network connections");
     fprintf(stderr, "  %-20s %s\n", "-O, --no-outbound", "disable outbound network connections");
+    fprintf(stderr, "  %-20s %s\n", "    --no-ipv6", "don't listen on IPv6 for default ports");
     fprintf(stderr, "  %-20s %s\n", "-4, --ipv4", "restrict IPv4 listeners to a specific address");
     fprintf(stderr, "  %-20s %s\n", "-6, --ipv6", "restrict IPv6 listeners to a specific address");
     fprintf(stderr, "  %-20s %s\n", "-r, --tls-cert", "TLS certificate to use");
@@ -1776,23 +1929,24 @@ void print_usage() {
     fprintf(stderr, "%s Minimal.db Minimal.db.new\n", this_program);
 }
 
-int waif_conversion_type = _TYPE_WAIF; /* For shame. We can remove this someday. */
+int waif_conversion_type = _TYPE_WAIF;    /* For shame. We can remove this someday. */
 
-int main(int argc, char** argv) {
-
+int
+main(int argc, char **argv)
+{
     alloc_init();
 
     this_program = str_dup(argv[0]);
-    const char* log_file = nullptr;
-    const char* script_file = nullptr;
-    const char* script_line = nullptr;
+    const char *log_file = nullptr;
+    const char *script_file = nullptr;
+    const char *script_line = nullptr;
     int script_file_first = 0;
     int emergency = 0;
     Var desc = Var::new_int(0);
 
 #ifdef USE_TLS
-    const char* certificate_path = nullptr;
-    const char* key_path = nullptr;
+    const char *certificate_path = nullptr;
+    const char *key_path = nullptr;
 #endif
 
     init_cmdline(argc, argv);
@@ -1805,6 +1959,7 @@ int main(int argc, char** argv) {
     bool cmdline_key = false;
     bool cmdline_filedir = false;
     bool cmdline_execdir = false;
+    bool cmdline_noipv6 = false;
     //
 
     std::vector<uint16_t> initial_ports;
@@ -1814,68 +1969,77 @@ int main(int argc, char** argv) {
 
     int option_index = 0;
     int c = 0;
-    static struct option long_options[] = {
-        {"version", no_argument, nullptr, 'v'},
-        {"emergency", no_argument, nullptr, 'e'},
-        {"log", required_argument, nullptr, 'l'},
-        {"start-script", required_argument, nullptr, 'f'},
-        {"start-line", required_argument, nullptr, 'c'},
-        {"waif-type", required_argument, nullptr, 'w'},
-        {"clear-move", no_argument, nullptr, 'm'},
-        {"outbound", no_argument, nullptr, 'o'},
-        {"no-outbound", no_argument, nullptr, 'O'},
-        {"tls-port", no_argument, nullptr, 't'},
-        {"ipv4", required_argument, nullptr, '4'},
-        {"ipv6", required_argument, nullptr, '6'},
-        {"port", required_argument, nullptr, 'p'},
-        {"tls-cert", required_argument, nullptr, 'r'},
-        {"tls-key", required_argument, nullptr, 'k'},
-        {"file-dir", required_argument, nullptr, 'i'},
-        {"exec-dir", required_argument, nullptr, 'x'},
-        {"help", no_argument, nullptr, 'h'},
-        {nullptr, 0, nullptr, 0}};
+    static struct option long_options[] =
+    {
+        {"version",         no_argument,        nullptr,            'v'},
+        {"emergency",       no_argument,        nullptr,            'e'},
+        {"log",             required_argument,  nullptr,            'l'},
+        {"start-script",    required_argument,  nullptr,            'f'},
+        {"start-line",      required_argument,  nullptr,            'c'},
+        {"waif-type",       required_argument,  nullptr,            'w'},
+        {"clear-move",      no_argument,        nullptr,            'm'},
+        {"outbound",        no_argument,        nullptr,            'o'},
+        {"no-outbound",     no_argument,        nullptr,            'O'},
+        {"no-ipv6",         no_argument,        nullptr,            '3'},
+        {"tls-port",        no_argument,        nullptr,            't'},
+        {"ipv4",            required_argument,  nullptr,            '4'},
+        {"ipv6",            required_argument,  nullptr,            '6'},
+        {"port",            required_argument,  nullptr,            'p'},
+        {"tls-cert",        required_argument,  nullptr,            'r'},
+        {"tls-key",         required_argument,  nullptr,            'k'},
+        {"file-dir",        required_argument,  nullptr,            'i'},
+        {"exec-dir",        required_argument,  nullptr,            'x'},
+        {"help",            no_argument,        nullptr,            'h'},
+        {nullptr,           0,                  nullptr,              0}
+    };
 
-    while ((c = getopt_long(argc, argv, "vel:f:c:w:moOt:4:6:p:r:k:i:x:h", long_options, &option_index)) != -1) {
-        switch (c) {
-            case 'v': /* --version; print version and exit */
+    while ((c = getopt_long(argc, argv, "vel:f:c:w:moOt:4:6:p:r:k:i:x:h", long_options, &option_index)) != -1)
+    {
+        switch (c)
+        {
+            case 'v':                   /* --version; print version and exit */
             {
                 fprintf(stderr, "ToastStunt version %s\n", server_version);
                 exit(1);
-            } break;
+            }
+            break;
 
-            case 'e': /* --emergency; emergency wizard mode */
+            case 'e':                   /* --emergency; emergency wizard mode */
                 emergency = 1;
                 break;
 
-            case 'l': /* --log; specify log file */
+            case 'l':                   /* --log; specify log file */
             {
                 log_file = optarg;
                 set_log_file_name(log_file);
-            } break;
+            }
+            break;
 
-            case 'f': /* --start-script; file of code to pass to :do_start_script */
+            case 'f':                   /* --start-script; file of code to pass to :do_start_script */
             {
                 if (!script_line)
                     script_file_first = 1;
                 script_file = optarg;
-            } break;
+            }
+            break;
 
-            case 'c': /* --start-line; line of code to pass to :do_start_script */
+            case 'c':                   /* --start-line; line of code to pass to :do_start_script */
             {
                 if (!script_file)
                     script_file_first = 0;
                 script_line = optarg;
-            } break;
+            }
+            break;
 
-            case 'w': /* --waif-type; old waif type to use for conversion */
+            case 'w':                   /* --waif-type; old waif type to use for conversion */
                 waif_conversion_type = atoi(optarg);
                 break;
 
-            case 'm': /* --clear-move; clear all last_move properties and don't set new ones */
+            case 'm':                   /* --clear-move; clear all last_move properties and don't set new ones */
                 clear_last_move = true;
                 break;
 
-            case 'o': /* --outbound; enable outbound network connections */
+            case 'o':                   /* --outbound; enable outbound network connections */
             {
 #ifndef OUTBOUND_NETWORK
                 fprintf(stderr, "Outbound networking is disabled. The '--outbound' option is invalid.\n");
@@ -1884,46 +2048,58 @@ int main(int argc, char** argv) {
                 cmdline_outbound = true;
                 outbound_network_enabled = true;
 #endif
-            } break;
+            }
+            break;
 
-            case 'O': /* --no-outbound; disable outbound network connections */
+            case 'O':                   /* --no-outbound; disable outbound network connections */
             {
 #ifdef OUTBOUND_NETWORK
                 cmdline_outbound = true;
                 outbound_network_enabled = false;
 #endif
-            } break;
+            }
+            break;
+            
+            case '3':                   /* --no-ipv6; disable initial IPv6 listeners */
+            {
+                cmdline_noipv6 = true;
+            }
+            break;
 
-            case '4': /* --ipv4; restrict ipv4 listener */
+            case '4':                   /* --ipv4; restrict ipv4 listener */
             {
                 cmdline_ipv4 = true;
                 bind_ipv4 = str_dup(optarg);
-            } break;
+            }
+            break;
 
-            case '6': /* --ipv6; restrict ipv6 listener */
+            case '6':                   /* --ipv6; restrict ipv6 listener */
             {
                 cmdline_ipv6 = true;
                 bind_ipv6 = str_dup(optarg);
-            } break;
+            }
+            break;
 
-            case 'p': /* --port; standard listening port */
+            case 'p':                   /* --port; standard listening port */
             {
-                char* p = nullptr;
+                char *p = nullptr;
                 initial_ports.push_back(strtoul(optarg, &p, 10));
-            } break;
+            }
+            break;
 
-            case 't': /* --tls-port; TLS listening port */
+            case 't':                   /* --tls-port; TLS listening port */
             {
 #ifndef USE_TLS
                 fprintf(stderr, "TLS is disabled or not supported. The '--tls-port' option is invalid.\n");
                 exit(1);
 #else
-                char* p = nullptr;
+                char *p = nullptr;
                 initial_tls_ports.push_back(strtoul(optarg, &p, 10));
 #endif
-            } break;
+            }
+            break;
 
-            case 'r': /* --tls-cert; TLS certificate path */
+            case 'r':                   /* --tls-cert; TLS certificate path */
             {
 #ifndef USE_TLS
                 fprintf(stderr, "TLS is disabled or not supported. The '--tls' option is invalid.\n");
@@ -1932,9 +2108,10 @@ int main(int argc, char** argv) {
                 cmdline_cert = true;
                 default_certificate_path = optarg;
 #endif
-            } break;
+            }
+            break;
 
-            case 'k': /* --tls-key; TLS key path */
+            case 'k':                   /* --tls-key; TLS key path */
             {
 #ifndef USE_TLS
                 fprintf(stderr, "TLS is disabled or not supported. The '--tls' option is invalid.\n");
@@ -1943,23 +2120,26 @@ int main(int argc, char** argv) {
                 cmdline_key = true;
                 default_key_path = optarg;
 #endif
-            } break;
+            }
+            break;
 
-            case 'i': /* --file-dir; the directory to store files in */
+            case 'i':                   /* --file-dir; the directory to store files in */
             {
                 cmdline_filedir = true;
                 file_subdir = optarg;
-            } break;
+            }
+            break;
 
-            case 'x': /* --exec-dir; the directory to store executables in */
+            case 'x':                   /* --exec-dir; the directory to store executables in */
             {
                 cmdline_execdir = true;
                 exec_subdir = optarg;
-            } break;
+            }
+            break;
 
-            case 'h': /* --help; show usage instructions */
+            case 'h':                   /* --help; show usage instructions */
                 print_usage();
-                break;
+                exit(1);
 
             default:
                 // Should we print usage here? It's pretty spammy...
@@ -1971,7 +2151,7 @@ int main(int argc, char** argv) {
     argc -= optind;
 
     if (log_file) {
-        FILE* f = fopen(log_file, "a");
+        FILE *f = fopen(log_file, "a");
 
         if (f)
             set_log_file(f);
@@ -1983,28 +2163,33 @@ int main(int argc, char** argv) {
         set_log_file(stderr);
     }
 
-    if ((emergency && (script_file || script_line)) || !db_initialize(&argc, &argv) || !network_initialize(argc, argv, &desc)) {
+    if ((emergency && (script_file || script_line))
+            || !db_initialize(&argc, &argv)
+            || !network_initialize(argc, argv, &desc)) {
         print_usage();
         exit(1);
     }
 
     if (initial_ports.empty()
 #ifdef USE_TLS
-        && initial_tls_ports.empty()
+            && initial_tls_ports.empty()
 #endif
-        && desc.v.num == 0)
+            && desc.v.num == 0)
         desc.v.num = DEFAULT_PORT;
 
     // If we caught a port at the end of the arglist, add it to the rest.
     if (desc.v.num != 0)
         initial_ports.push_back(desc.v.num);
 
+    asprintf(&file_subdir, "%s", FILE_SUBDIR);
+    asprintf(&exec_subdir, "%s", EXEC_SUBDIR);
+
     /* Now that it's so easy to change file / exec directories, it's easy to forget the last '/'
        We'll helpfully add it back to avoid confusion. */
-    if (file_subdir[strlen(file_subdir) - 1] != '/')
+    if (file_subdir[strlen(file_subdir)-1] != '/')
         asprintf(&file_subdir, "%s/", file_subdir);
-    if (exec_subdir[strlen(exec_subdir) - 1] != '/')
-        asprintf(&exec_subdir, "%s/", exec_subdir);
+    if (exec_subdir[strlen(exec_subdir)-1] != '/')
+        asprintf(&exec_subdir, "%s/", file_subdir);
 
     applog(LOG_INFO1, " _   __           _____                ______\n");
     applog(LOG_INFO1, "( `^` ))  ___________  /_____  _________ __  /_\n");
@@ -2021,17 +2206,15 @@ int main(int argc, char** argv) {
 
     parent_pid = getpid();
 
-    enum PortType {
-        PORT_STANDARD = 0,
-        PORT_TLS
-    };
-    enum IPProtocol {
-        PROTO_IPv4 = 0,
-        PROTO_IPv6
-    };
+    enum PortType {PORT_STANDARD = 0, PORT_TLS};
+    enum IPProtocol {PROTO_IPv4 = 0, PROTO_IPv6};
 
     applog(LOG_INFO1, "STARTING: Version %s (%" PRIdN "-bit) of the ToastStunt/LambdaMOO server\n", server_version, SERVER_BITS);
-    applog(LOG_INFO1, "          (Task timeouts measured in %s seconds.)\n", virtual_timer_available() ? "server CPU" : "wall-clock");
+    applog(LOG_INFO1, "          (Task timeouts measured in %s seconds.)\n",
+           virtual_timer_available() ? "server CPU" : "wall-clock");
+#ifdef JEMALLOC_FOUND
+    applog(LOG_INFO1, "          (Using jemalloc)\n");
+#endif
     applog(LOG_INFO1, "          (Process id %" PRIdN ")\n", parent_pid);
     if (waif_conversion_type != _TYPE_WAIF)
         applog(LOG_WARNING, "(Using type '%i' for waifs; will convert to '%i' at next checkpoint)\n", waif_conversion_type, _TYPE_WAIF);
@@ -2040,14 +2223,16 @@ int main(int argc, char** argv) {
 
     std::string port_string;
 #ifdef USE_TLS
-    for (int port_type = 0; port_type < 2; port_type++) {
-        auto* ports = (port_type == PORT_STANDARD ? &initial_ports : &initial_tls_ports);
+    for (int port_type = 0; port_type < 2; port_type++)
+    {
+        auto *ports = (port_type == PORT_STANDARD ? &initial_ports : &initial_tls_ports);
 #else
     {
         auto port_type = PORT_STANDARD;
-        auto* ports = &initial_ports;
+        auto *ports = &initial_ports;
 #endif
-        if (!ports->empty()) {
+        if (!ports->empty())
+        {
             for (auto the_port : *ports)
                 port_string += std::to_string(the_port) += ", ";
             port_string.resize(port_string.size() - 2);
@@ -2057,6 +2242,8 @@ int main(int argc, char** argv) {
     }
 
     applog(LOG_NOTICE, "NETWORK: Outbound network connections %s.\n", outbound_network_enabled ? "enabled" : "disabled");
+    if (cmdline_noipv6)
+        applog(LOG_INFO2, "CMDLINE: Not listening for IPv6 connections on default ports.\n");
     if (cmdline_ipv4)
         applog(LOG_INFO2, "CMDLINE: IPv4 source address restricted to: %s.\n", bind_ipv4);
     if (cmdline_ipv6)
@@ -2079,20 +2266,24 @@ int main(int argc, char** argv) {
 
     std::vector<slistener*> initial_listeners;
 
-    slistener* new_listener;
+
+    slistener *new_listener;
 
 #ifdef USE_TLS
-    for (int port_type = 0; port_type < 2; port_type++) {
-        auto* ports = (port_type == PORT_STANDARD ? &initial_ports : &initial_tls_ports);
+    for (int port_type = 0; port_type < 2; port_type++)
+    {
+        auto *ports = (port_type == PORT_STANDARD ? &initial_ports : &initial_tls_ports);
 #else
     {
         auto port_type = PORT_STANDARD;
-        auto* ports = &initial_ports;
+        auto *ports = &initial_ports;
 #endif
-        for (auto& the_port : *ports) {
+        for (auto &the_port : *ports)
+        {
             desc.v.num = the_port;
-            for (int ip_type = 0; ip_type < 2; ip_type++) {
-                if ((new_listener = new_slistener(SYSTEM_OBJECT, desc, 1, nullptr, ip_type TLS_PORT_TYPE TLS_CERT_PATH)) == nullptr)
+            for (int ip_type = 0; ip_type < (cmdline_noipv6 ? 1 : 2); ip_type++)
+            {
+                if ((new_listener = new_slistener(SYSTEM_OBJECT, desc, 1, nullptr, ip_type, nullptr TLS_PORT_TYPE TLS_CERT_PATH)) == nullptr)
                     errlog("Error creating %s%s listener on port %i.\n", port_type == PORT_TLS ? "TLS " : "", ip_type == PROTO_IPv6 ? "IPv6" : "IPv4", the_port);
                 else
                     initial_listeners.push_back(new_listener);
@@ -2106,8 +2297,9 @@ int main(int argc, char** argv) {
     }
     free_var(desc);
     // I doubt anybody will have enough listeners for this to be worthwhile, but why not.
+    // the shrink_to_fit() made lldb have kittens when attached to a LeakCheck build - TODO
     initial_ports.clear();
-    initial_ports.shrink_to_fit();
+    //initial_ports.shrink_to_fit();
 #ifdef USE_TLS
     initial_tls_ports.clear();
     initial_tls_ports.shrink_to_fit();
@@ -2131,7 +2323,8 @@ int main(int argc, char** argv) {
             do_script_file(script_file);
         if (script_line)
             do_script_line(script_line);
-    } else {
+    }
+    else {
         if (script_line)
             do_script_line(script_line);
         if (script_file)
@@ -2142,9 +2335,11 @@ int main(int argc, char** argv) {
         int status = 0;
         int listen_failures = 0;
 
-        for (auto& l : initial_listeners) {
+        for (auto &l : initial_listeners)
+        {
             status = start_listener(l);
-            if (!status) {
+            if (!status)
+            {
                 errlog("Failed to listen on port %i\n", l->port);
                 free_slistener(l);
                 listen_failures++;
@@ -2158,7 +2353,7 @@ int main(int argc, char** argv) {
         initial_listeners.shrink_to_fit();
 
         main_loop();
-
+        background_shutdown();
         network_shutdown();
     }
 
@@ -2172,20 +2367,22 @@ int main(int argc, char** argv) {
     pcre_shutdown();
 
     free_str(this_program);
-
     alloc_finalize();
-
+    
     return 0;
 }
+
 
 /**** built in functions ****/
 
 static package
-bf_server_version(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_server_version(Var arglist, Byte next, void *vdata, Objid progr)
+{
     Var r;
-    if (arglist.v.list[0].v.num > 0) {
-        r = server_version_full(arglist.v.list[1]);
-    } else {
+    if (arglist.length() > 0) {
+        r = server_version_full(arglist[1]);
+    }
+    else {
         r.type = TYPE_STR;
         r.v.str = str_dup(server_version);
     }
@@ -2197,9 +2394,10 @@ bf_server_version(Var arglist, Byte next, void* vdata, Objid progr) {
 }
 
 static package
-bf_renumber(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_renumber(Var arglist, Byte next, void *vdata, Objid progr)
+{
     Var r;
-    Objid o = arglist.v.list[1].v.obj;
+    Objid o = arglist[1].v.obj;
     free_var(arglist);
 
     if (!valid(o))
@@ -2213,7 +2411,8 @@ bf_renumber(Var arglist, Byte next, void* vdata, Objid progr) {
 }
 
 static package
-bf_reset_max_object(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_reset_max_object(Var arglist, Byte next, void *vdata, Objid progr)
+{
     free_var(arglist);
 
     if (!is_wizard(progr))
@@ -2225,7 +2424,8 @@ bf_reset_max_object(Var arglist, Byte next, void* vdata, Objid progr) {
 
 /* Returns total memory usage, resident set size, shared pages, text/code, and data + stack. */
 static package
-bf_memory_usage(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_memory_usage(Var arglist, Byte next, void *vdata, Objid progr)
+{
     // LINUX: Values are returned in pages. To get KB, multiply by 4.
     // macOS: The only value available is the resident set size, which is returned in bytes.
     free_var(arglist);
@@ -2241,12 +2441,14 @@ bf_memory_usage(Var arglist, Byte next, void* vdata, Objid progr) {
     else
         return make_error_pack(E_FILE);
 #else
-    FILE* f = fopen("/proc/self/statm", "r");
+    FILE *f = fopen("/proc/self/statm", "r");
 
     if (!f)
         return make_error_pack(E_FILE);
 
-    if (fscanf(f, "%Lf %Lf %Lf %Lf %Lf %Lf %Lf", &size, &resident, &share, &text, &lib, &data, &dt) != 7) {
+    if (fscanf(f, "%Lf %Lf %Lf %Lf %Lf %Lf %Lf",
+               &size, &resident, &share, &text, &lib, &data, &dt) != 7)
+    {
         fclose(f);
         return make_error_pack(E_NACC);
     }
@@ -2255,54 +2457,105 @@ bf_memory_usage(Var arglist, Byte next, void* vdata, Objid progr) {
 #endif
 
     Var s = new_list(5);
-    s.v.list[1].type = TYPE_FLOAT;
-    s.v.list[2].type = TYPE_FLOAT;
-    s.v.list[3].type = TYPE_FLOAT;
-    s.v.list[4].type = TYPE_FLOAT;
-    s.v.list[5].type = TYPE_FLOAT;
-    s.v.list[1].v.fnum = size;      // Total program size
-    s.v.list[2].v.fnum = resident;  // Resident set size
-    s.v.list[3].v.fnum = share;     // Shared pages from shared mappings
-    s.v.list[4].v.fnum = text;      // Text (code)
-    s.v.list[5].v.fnum = data;      // Data + stack
+    s[1].type = TYPE_FLOAT;
+    s[2].type = TYPE_FLOAT;
+    s[3].type = TYPE_FLOAT;
+    s[4].type = TYPE_FLOAT;
+    s[5].type = TYPE_FLOAT;
+    s[1].v.fnum = size;           // Total program size
+    s[2].v.fnum = resident;       // Resident set size
+    s[3].v.fnum = share;          // Shared pages from shared mappings
+    s[4].v.fnum = text;           // Text (code)
+    s[5].v.fnum = data;           // Data + stack
 
     return make_var_pack(s);
 }
+
+#ifdef JEMALLOC_FOUND
+/* Returns a LIST of stats from jemalloc about memory usage.
+ * NOTE: jemalloc must have been compiled with stats enabled for this to work.
+ *       Otherwise it will just return all 0's.
+ */
+static package
+bf_malloc_stats(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    free_var(arglist);
+
+    size_t sz;
+
+    // Update the cached statistics.
+    uint64_t epoch = 1;
+    sz = sizeof(uint64_t);
+    mallctl("epoch", &epoch, &sz, &epoch, sz);
+
+    size_t allocated, active, resident, metadata, mapped, allocated_large, active_large;
+    sz = sizeof(size_t);
+
+    if (mallctl("stats.allocated", &allocated, &sz, NULL, 0) != 0)
+        allocated = 0;
+
+    if (mallctl("stats.active", &active, &sz, NULL, 0) != 0)
+        active = 0;
+
+    if (mallctl("stats.resident", &resident, &sz, NULL, 0) != 0)
+        resident = 0;
+
+    if (mallctl("stats.metadata", &metadata, &sz, NULL, 0) != 0)
+        metadata = 0;
+
+    if (mallctl("stats.mapped", &mapped, &sz, NULL, 0) != 0)
+        mapped = 0;
+
+    if (mallctl("stats.allocated_large", &allocated_large, &sz, NULL, 0) != 0)
+        allocated_large = 0;
+
+    if (mallctl("stats.active_large", &active_large, &sz, NULL, 0) != 0)
+        active_large = 0;
+
+    Var s = new_list(7);
+    s[1] = Var::new_int(allocated);
+    s[2] = Var::new_int(active);
+    s[3] = Var::new_int(resident);
+    s[4] = Var::new_int(metadata);
+    s[5] = Var::new_int(mapped);
+    s[6] = Var::new_int(allocated_large);
+    s[7] = Var::new_int(active_large);
+
+    return make_var_pack(s);
+}
+#endif
+
 
 /* Return resource usage information from the operating system.
  * Values returned: {{load averages}, user time, system time, page reclaims, page faults, block input ops, block output ops, voluntary context switches, involuntary context switches, signals received
  * Divide load averages by 65536. */
 static package
-bf_usage(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_usage(Var arglist, Byte next, void *vdata, Objid progr)
+{
     free_var(arglist);
     if (!is_wizard(progr))
         return make_error_pack(E_PERM);
 
-    Var r = new_list(9);
     Var cpu = new_list(3);
 
-    // Setup all of our types ahead of time.
-    int x = 0;
-    for (x = 3; x <= r.v.list[0].v.num; x++)
-        r.v.list[x].type = TYPE_INT;
-
+    int x;
     for (x = 1; x <= 3; x++)
-        cpu.v.list[x] = Var::new_int(0);  // initialize to all 0
+        cpu[x] = Var::new_int(0); //initialize to all 0
 
 #if !defined(__FreeBSD__) && !defined(__MACH__)
     struct sysinfo sys_info;
     int info_ret = sysinfo(&sys_info);
 
     for (x = 0; x < 3; x++)
-        cpu.v.list[x + 1].v.num = (info_ret != 0 ? 0 : sys_info.loads[x]);
+        cpu[x + 1] = Var::new_int(info_ret != 0 ? 0 : sys_info.loads[x]);
 #else
-        /*** Begin CPU load averages ***/
+    /*** Begin CPU load averages ***/
 #ifdef __MACH__
     struct loadavg load;
     size_t size = sizeof(load);
     if (sysctlbyname("vm.loadavg", &load, &size, 0, 0) != -1) {
         for (x = 0; x < 3; x++)
-            cpu.v.list[x + 1].v.num = load.ldavg[x];
+            cpu[x + 1].v.num = load.ldavg[x];
     }
 #endif
 #endif
@@ -2311,17 +2564,16 @@ bf_usage(Var arglist, Byte next, void* vdata, Objid progr) {
     struct rusage usage;
     getrusage(RUSAGE_SELF, &usage);
 
-    r.v.list[1].type = TYPE_FLOAT;
-    r.v.list[2].type = TYPE_FLOAT;
-    r.v.list[1].v.fnum = (double)usage.ru_utime.tv_sec + (double)usage.ru_utime.tv_usec / CLOCKS_PER_SEC;
-    r.v.list[2].v.fnum = (double)usage.ru_stime.tv_sec + (double)usage.ru_stime.tv_usec / CLOCKS_PER_SEC;
-    r.v.list[3].v.num = usage.ru_minflt;
-    r.v.list[4].v.num = usage.ru_majflt;
-    r.v.list[5].v.num = usage.ru_inblock;
-    r.v.list[6].v.num = usage.ru_oublock;
-    r.v.list[7].v.num = usage.ru_nvcsw;
-    r.v.list[8].v.num = usage.ru_nivcsw;
-    r.v.list[9].v.num = usage.ru_nsignals;
+    Var r = new_list(9);
+    r[1] = Var::new_float(static_cast<double>(usage.ru_utime.tv_sec) + static_cast<double>(usage.ru_utime.tv_usec) / CLOCKS_PER_SEC);
+    r[2] = Var::new_float(static_cast<double>(usage.ru_stime.tv_sec) + static_cast<double>(usage.ru_stime.tv_usec) / CLOCKS_PER_SEC);
+    r[3] = Var::new_int(usage.ru_minflt);
+    r[4] = Var::new_int(usage.ru_majflt);
+    r[5] = Var::new_int(usage.ru_inblock);
+    r[6] = Var::new_int(usage.ru_oublock);
+    r[7] = Var::new_int(usage.ru_nvcsw);
+    r[8] = Var::new_int(usage.ru_nivcsw);
+    r[9] = Var::new_int(usage.ru_nsignals);
 
     // Add in our load averages.
     r = listinsert(r, cpu, 1);
@@ -2330,16 +2582,17 @@ bf_usage(Var arglist, Byte next, void* vdata, Objid progr) {
 
 /* Unceremoniously exit the server, creating a panic dump of the database. */
 static package
-bf_panic(Var arglist, Byte next, void* vdata, Objid progr) {
-    const char* msg;
+bf_panic(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    const char *msg;
 
     if (!is_wizard(progr)) {
         free_var(arglist);
         return make_error_pack(E_PERM);
     }
 
-    if (arglist.v.list[0].v.num) {
-        msg = str_dup(arglist.v.list[1].v.str);
+    if (arglist.length()) {
+        msg = str_dup(arglist[1].v.str);
     } else {
         msg = "";
     }
@@ -2350,10 +2603,12 @@ bf_panic(Var arglist, Byte next, void* vdata, Objid progr) {
     return make_error_pack(E_NONE);
 }
 
+
 static package
-bf_shutdown(Var arglist, Byte next, void* vdata, Objid progr) {
-    int nargs = arglist.v.list[0].v.num;
-    const char* message = (nargs >= 1 ? arglist.v.list[1].v.str : nullptr);
+bf_shutdown(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    int nargs = arglist.length();
+    const char *message = (nargs >= 1 ? arglist[1].v.str : nullptr);
 
     if (!is_wizard(progr)) {
         free_var(arglist);
@@ -2370,7 +2625,8 @@ bf_shutdown(Var arglist, Byte next, void* vdata, Objid progr) {
 }
 
 static package
-bf_dump_database(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_dump_database(Var arglist, Byte next, void *vdata, Objid progr)
+{
     free_var(arglist);
     if (!is_wizard(progr))
         return make_error_pack(E_PERM);
@@ -2380,7 +2636,8 @@ bf_dump_database(Var arglist, Byte next, void* vdata, Objid progr) {
 }
 
 static package
-bf_db_disk_size(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_db_disk_size(Var arglist, Byte next, void *vdata, Objid progr)
+{
     Var v;
 
     free_var(arglist);
@@ -2392,9 +2649,10 @@ bf_db_disk_size(Var arglist, Byte next, void* vdata, Objid progr) {
 }
 
 #ifdef OUTBOUND_NETWORK
-static slistener*
-find_slistener_by_oid(Objid obj) {
-    slistener* l;
+static slistener *
+find_slistener_by_oid(Objid obj)
+{
+    slistener *l;
 
     for (l = all_slisteners; l; l = l->next)
         if (l->oid == obj)
@@ -2405,13 +2663,14 @@ find_slistener_by_oid(Objid obj) {
 #endif /* OUTBOUND_NETWORK */
 
 static package
-bf_open_network_connection(Var arglist, Byte next, void* vdata, Objid progr) {
+bf_open_network_connection(Var arglist, Byte next, void *vdata, Objid progr)
+{
 #ifdef OUTBOUND_NETWORK
     /* STR <host>, INT <port>[, MAP <options>]
     Options: ipv6 -> INT, listener -> OBJ, tls -> INT, tls_verify -> INT */
 
     Var r;
-    enum error e;
+    package e;
     server_listener sl;
     slistener l;
     bool use_ipv6 = false;
@@ -2435,8 +2694,8 @@ bf_open_network_connection(Var arglist, Byte next, void* vdata, Objid progr) {
 
     sl.ptr = nullptr;
 
-    if (arglist.v.list[0].v.num >= 3) {
-        Var options = arglist.v.list[3];
+    if (arglist.length() >= 3) {
+        Var options = arglist[3];
         Var value;
 
 #ifdef USE_TLS
@@ -2477,7 +2736,7 @@ bf_open_network_connection(Var arglist, Byte next, void* vdata, Objid progr) {
 
     e = network_open_connection(arglist, sl, use_ipv6 USE_TLS_BOOL);
     free_var(arglist);
-    if (e == E_NONE) {
+    if (std::get<raise_t>(e.u).code.v.err == E_NONE) {
         /* The connection was successfully opened, implying that
          * server_new_connection was called, implying and a new negative
          * player number was allocated for the connection.  Thus, the old
@@ -2485,16 +2744,12 @@ bf_open_network_connection(Var arglist, Byte next, void* vdata, Objid progr) {
          */
         r.type = TYPE_OBJ;
         r.v.obj = next_unconnected_player + 1;
-    } else {
-        r.type = TYPE_ERR;
-        r.v.err = e;
-    }
-    if (r.type == TYPE_ERR)
-        return make_error_pack(r.v.err);
-    else
         return make_var_pack(r);
+    } else {
+        return e;
+    }
 
-#else /* !OUTBOUND_NETWORK */
+#else               /* !OUTBOUND_NETWORK */
 
     /* This function is disabled in this server. */
 
@@ -2505,14 +2760,17 @@ bf_open_network_connection(Var arglist, Byte next, void* vdata, Objid progr) {
 }
 
 static package
-bf_connected_players(Var arglist, Byte next, void* vdata, Objid progr) {
-    shandle* h;
-    int nargs = arglist.v.list[0].v.num;
-    int show_all = (nargs >= 1 && is_true(arglist.v.list[1]));
+bf_connected_players(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    shandle *h;
+    int nargs = arglist.length();
+    int show_all = (nargs >= 1 && is_true(arglist[1]));
     int count = 0;
     Var result;
 
     free_var(arglist);
+
+    all_shandles_mutex.lock();
     for (h = all_shandles; h; h = h->next)
         if ((show_all || h->connection_time != 0) && !h->disconnect_me.load())
             count++;
@@ -2523,18 +2781,20 @@ bf_connected_players(Var arglist, Byte next, void* vdata, Objid progr) {
     for (h = all_shandles; h; h = h->next) {
         if ((show_all || h->connection_time != 0) && !h->disconnect_me.load()) {
             count++;
-            result.v.list[count].type = TYPE_OBJ;
-            result.v.list[count].v.obj = h->player;
+            result[count].type = TYPE_OBJ;
+            result[count].v.obj = h->player;
         }
     }
+    all_shandles_mutex.unlock();
 
     return make_var_pack(result);
 }
 
 static package
-bf_connected_seconds(Var arglist, Byte next, void* vdata, Objid progr) { /* (player) */
+bf_connected_seconds(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (player) */
     Var r;
-    shandle* h = find_shandle(arglist.v.list[1].v.obj);
+    shandle *h = find_shandle(arglist[1].v.obj);
 
     r.type = TYPE_INT;
     if (h && h->connection_time != 0 && !h->disconnect_me.load())
@@ -2549,9 +2809,10 @@ bf_connected_seconds(Var arglist, Byte next, void* vdata, Objid progr) { /* (pla
 }
 
 static package
-bf_idle_seconds(Var arglist, Byte next, void* vdata, Objid progr) { /* (player) */
+bf_idle_seconds(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (player) */
     Var r;
-    shandle* h = find_shandle(arglist.v.list[1].v.obj);
+    shandle *h = find_shandle(arglist[1].v.obj);
 
     r.type = TYPE_INT;
     if (h && !h->disconnect_me.load())
@@ -2566,26 +2827,27 @@ bf_idle_seconds(Var arglist, Byte next, void* vdata, Objid progr) { /* (player) 
 }
 
 static package
-bf_connection_name(Var arglist, Byte next, void* vdata, Objid progr) { /* (player [, IP | LEGACY]) */
-    Objid who = arglist.v.list[1].v.obj;
-    shandle* h = find_shandle(who);
+bf_connection_name(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (player [, IP | LEGACY]) */
+    Objid who = arglist[1].v.obj;
+    shandle *h = find_shandle(who);
     Var r;
 
     r.type = TYPE_STR;
     r.v.str = nullptr;
 
-    if (h && !h->disconnect_me.load()) {
-        if (arglist.v.list[0].v.num == 1) {
-            lock_connection_name_mutex(h->nhandle);
+    if (h && !h->disconnect_me) {
+        lock_connection_name_mutex(h->nhandle);
+        if (arglist.length() == 1) {
             r.v.str = str_dup(network_connection_name(h->nhandle));
-            unlock_connection_name_mutex(h->nhandle);
-        } else if (arglist.v.list[2].v.num == 1)
+        } else if (arglist[2].v.num == 1)
             r.v.str = str_dup(network_ip_address(h->nhandle));
         else {
-            char* full_conn_name = full_network_connection_name(h->nhandle, true);
+            char *full_conn_name = full_network_connection_name(h->nhandle, true);
             r.v.str = str_dup(full_conn_name);
             free(full_conn_name);
         }
+        unlock_connection_name_mutex(h->nhandle);
     }
 
     free_var(arglist);
@@ -2598,63 +2860,79 @@ bf_connection_name(Var arglist, Byte next, void* vdata, Objid progr) { /* (playe
     }
 }
 
-void name_lookup_callback(Var arglist, Var* ret) {
-    int nargs = arglist.v.list[0].v.num;
-    Objid who = arglist.v.list[1].v.obj;
-    shandle* h = find_shandle(who);
-    bool rewrite_connect_name = nargs > 1 && is_true(arglist.v.list[2]);
+void
+name_lookup_cleanup(void *extra_data)
+{
+    network_handle nh;
+    nh.ptr = extra_data;
 
-    if (!h || h->disconnect_me.load())
+    decrement_nhandle_refcount(nh);
+}
+
+void
+name_lookup_callback(Var arglist, Var *ret, void *extra_data)
+{
+    int nargs = arglist.length();
+    Objid who = arglist[1].v.obj;
+    shandle *h = find_shandle(who);
+    bool rewrite_connect_name = nargs > 1 && is_true(arglist[2]);
+
+    network_handle nh;
+    nh.ptr = extra_data;
+
+    if (!h || h->disconnect_me)
         make_error_map(E_INVARG, "Invalid connection", ret);
-    else {
-        const char* name;
+    else
+    {
+        const char *name;
         int status = lookup_network_connection_name(h->nhandle, &name);
-        *ret = str_dup_to_var(name);
 
-        if (rewrite_connect_name && status == 0)
-            if (network_name_lookup_rewrite(who, name) != 0)
-                make_error_map(E_INVARG, "Failed to rewrite connection name.", ret);
+        /* If the server is shutting down, this is meaningless and creates
+         * a bit of a mess anyway. So don't bother continuing. */
+        if (!shutdown_triggered.load()) {
+            ret->type = TYPE_STR;
+            ret->v.str = name;
 
-        free_str(name);
+            if (rewrite_connect_name && status == 0)
+                if (network_name_lookup_rewrite(who, name, nh) != 0)
+                    make_error_map(E_INVARG, "Failed to rewrite connection name.", ret);
+        }
     }
-    if (h)
-        decrement_nhandle_refcount(h->nhandle);
 }
 
 static package
-bf_name_lookup(Var arglist, Byte next, void* vdata, Objid progr) {
-    if (!is_wizard(progr) && progr != arglist.v.list[1].v.obj)
+bf_name_lookup(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    if (!is_wizard(progr) && progr != arglist[1].v.obj)
         return make_error_pack(E_PERM);
 
     /* The main thread should keep track of nhandle refcounts to
        ensure that close_nhandle doesn't pull the rug out from
        under the other threads. */
-    shandle* h = find_shandle(arglist.v.list[1].v.obj);
+    shandle *h = find_shandle(arglist[1].v.obj);
 
-    if (!h || h->disconnect_me.load()) {
+    if (!h || h->disconnect_me) {
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
 
     increment_nhandle_refcount(h->nhandle);
 
-    char* human_string = nullptr;
-    asprintf(&human_string, "name_lookup for #%" PRIdN "", arglist.v.list[1].v.obj);
-    return background_thread(name_lookup_callback, &arglist, human_string);
+    return background_thread(name_lookup_callback, &arglist, (void*)h->nhandle.ptr, name_lookup_cleanup);
 }
 
 static package
-bf_notify(Var arglist, Byte next, void* vdata, Objid progr) { /* (player, string [, no_flush]) */
-    Objid conn = arglist.v.list[1].v.obj;
-    const char* line = arglist.v.list[2].v.str;
-    int no_flush = (arglist.v.list[0].v.num > 2
-                        ? is_true(arglist.v.list[3])
-                        : 0);
-    int no_newline = (arglist.v.list[0].v.num > 3
-                          ? is_true(arglist.v.list[4])
-                          : 0);
+bf_notify(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (player, string [, no_flush]) */
+    Objid conn = arglist[1].v.obj;
+    const char *line = arglist[2].v.str;
+    int no_flush = (arglist.length() > 2
+                    ? is_true(arglist[3])
+                    : 0);
+    int no_newline = (arglist.length() > 3
+                      ? is_true(arglist[4]) : 0);
 
-    shandle* h = find_shandle(conn);
+    shandle *h = find_shandle(conn);
     Var r;
 
     if (!is_wizard(progr) && progr != conn) {
@@ -2684,8 +2962,9 @@ bf_notify(Var arglist, Byte next, void* vdata, Objid progr) { /* (player, string
 }
 
 static package
-bf_boot_player(Var arglist, Byte next, void* vdata, Objid progr) { /* (object) */
-    Objid oid = arglist.v.list[1].v.obj;
+bf_boot_player(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (object) */
+    Objid oid = arglist[1].v.obj;
 
     free_var(arglist);
 
@@ -2697,16 +2976,20 @@ bf_boot_player(Var arglist, Byte next, void* vdata, Objid progr) { /* (object) *
 }
 
 static package
-bf_set_connection_option(Var arglist, Byte next, void* vdata, Objid progr) { /* (conn, option, value) */
-    Objid oid = arglist.v.list[1].v.obj;
-    const char* option = arglist.v.list[2].v.str;
-    Var value = arglist.v.list[3];
-    shandle* h = find_shandle(oid);
+bf_set_connection_option(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (conn, option, value) */
+    Objid oid = arglist[1].v.obj;
+    const char *option = arglist[2].v.str;
+    Var value = arglist[3];
+    shandle *h = find_shandle(oid);
     enum error e = E_NONE;
 
     if (oid != progr && !is_wizard(progr))
         e = E_PERM;
-    else if (!h || h->disconnect_me.load() || (!server_set_connection_option(h, option, value) && !tasks_set_connection_option(h->tasks, option, value) && !network_set_connection_option(h->nhandle, option, value)))
+    else if (!h || h->disconnect_me.load()
+             || (!server_set_connection_option(h, option, value)
+                 && !tasks_set_connection_option(h->tasks, option, value)
+                 && !network_set_connection_option(h->nhandle, option, value)))
         e = E_INVARG;
 
     free_var(arglist);
@@ -2717,11 +3000,12 @@ bf_set_connection_option(Var arglist, Byte next, void* vdata, Objid progr) { /* 
 }
 
 static package
-bf_connection_options(Var arglist, Byte next, void* vdata, Objid progr) { /* (conn [, opt-name]) */
-    Objid oid = arglist.v.list[1].v.obj;
-    int nargs = arglist.v.list[0].v.num;
-    const char* oname = (nargs >= 2 ? arglist.v.list[2].v.str : nullptr);
-    shandle* h = find_shandle(oid);
+bf_connection_options(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (conn [, opt-name]) */
+    Objid oid = arglist[1].v.obj;
+    int nargs = arglist.length();
+    const char *oname = (nargs >= 2 ? arglist[2].v.str : nullptr);
+    shandle *h = find_shandle(oid);
     Var ans;
 
     if (!h || h->disconnect_me.load()) {
@@ -2732,7 +3016,9 @@ bf_connection_options(Var arglist, Byte next, void* vdata, Objid progr) { /* (co
         return make_error_pack(E_PERM);
     }
     if (oname) {
-        if (!server_connection_option(h, oname, &ans) && !tasks_connection_option(h->tasks, oname, &ans) && !network_connection_option(h->nhandle, oname, &ans)) {
+        if (!server_connection_option(h, oname, &ans)
+                && !tasks_connection_option(h->tasks, oname, &ans)
+                && !network_connection_option(h->nhandle, oname, &ans)) {
             free_var(arglist);
             return make_error_pack(E_INVARG);
         }
@@ -2748,9 +3034,10 @@ bf_connection_options(Var arglist, Byte next, void* vdata, Objid progr) { /* (co
 }
 
 static package
-bf_connection_info(Var arglist, Byte next, void* vdata, Objid progr) { /* (conn) */
-    Objid oid = arglist.v.list[1].v.obj;
-    shandle* h = find_shandle(oid);
+bf_connection_info(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (conn) */
+    Objid oid = arglist[1].v.obj;
+    shandle *h = find_shandle(oid);
 
     if (!h || h->disconnect_me.load()) {
         free_var(arglist);
@@ -2761,39 +3048,41 @@ bf_connection_info(Var arglist, Byte next, void* vdata, Objid progr) { /* (conn)
     }
 
     // Avoid some mallocs
-    static Var src_addr = str_dup_to_var("source_address");
-    static Var src_ip = str_dup_to_var("source_ip");
-    static Var src_port = str_dup_to_var("source_port");
-    static Var dest_addr = str_dup_to_var("destination_address");
-    static Var dest_ip = str_dup_to_var("destination_ip");
-    static Var dest_port = str_dup_to_var("destination_port");
-    static Var protocol = str_dup_to_var("protocol");
+    static Var src_addr    = str_dup_to_var("source_address");
+    static Var src_ip      = str_dup_to_var("source_ip");
+    static Var src_port    = str_dup_to_var("source_port");
+    static Var dest_addr   = str_dup_to_var("destination_address");
+    static Var dest_ip     = str_dup_to_var("destination_ip");
+    static Var dest_port   = str_dup_to_var("destination_port");
+    static Var protocol    = str_dup_to_var("protocol");
     static Var is_outbound = str_dup_to_var("outbound");
 
     network_handle nh = h->nhandle;
 
-    Var ret = new_map();
-    ret = mapinsert(ret, var_ref(src_addr), str_ref_to_var(network_source_connection_name(nh)));
-    ret = mapinsert(ret, var_ref(src_port), Var::new_int(network_source_port(nh)));
-    ret = mapinsert(ret, var_ref(src_ip), str_ref_to_var(network_source_ip_address(nh)));
     lock_connection_name_mutex(nh);
-    ret = mapinsert(ret, var_ref(dest_addr), str_ref_to_var(network_connection_name(nh)));
-    unlock_connection_name_mutex(nh);
+
+    Var ret = new_map(9);
+    ret = mapinsert(ret, var_ref(src_addr), str_dup_to_var(network_source_connection_name(nh)));
+    ret = mapinsert(ret, var_ref(src_port), Var::new_int(network_source_port(nh)));
+    ret = mapinsert(ret, var_ref(src_ip), str_dup_to_var(network_source_ip_address(nh)));
+    ret = mapinsert(ret, var_ref(dest_addr), str_dup_to_var(network_connection_name(nh)));
     ret = mapinsert(ret, var_ref(dest_port), Var::new_int(network_port(nh)));
-    ret = mapinsert(ret, var_ref(dest_ip), str_ref_to_var(network_ip_address(nh)));
+    ret = mapinsert(ret, var_ref(dest_ip), str_dup_to_var(network_ip_address(nh)));
     ret = mapinsert(ret, var_ref(protocol), str_dup_to_var(network_protocol(nh)));
     ret = mapinsert(ret, var_ref(is_outbound), Var::new_int(h->outbound));
 #ifdef USE_TLS
     ret = mapinsert(ret, var_ref(tls_key), tls_connection_info(nh));
 #endif
 
+    unlock_connection_name_mutex(nh);
     free_var(arglist);
     return make_var_pack(ret);
 }
 
-static slistener*
-find_slistener(Var desc, bool use_ipv6) {
-    slistener* l;
+static slistener *
+find_slistener(Var desc, bool use_ipv6)
+{
+    slistener *l;
 
     for (l = all_slisteners; l; l = l->next)
         if (equality(desc, l->desc, 0) && l->ipv6 == use_ipv6)
@@ -2803,18 +3092,20 @@ find_slistener(Var desc, bool use_ipv6) {
 }
 
 static package
-bf_listen(Var arglist, Byte next, void* vdata, Objid progr) { /* (oid, desc) */
-    Objid oid = arglist.v.list[1].v.obj;
-    Var desc = arglist.v.list[2];
+bf_listen(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (oid, desc) */
+    Objid oid = arglist[1].v.obj;
+    Var desc = arglist[2];
     int print_messages = 0;
     bool ipv6 = false;
     enum error e = E_NONE;
-    slistener* l = nullptr;
+    slistener *l = nullptr;
     char error_msg[100];
+    const char *interface = nullptr;
 #ifdef USE_TLS
     bool use_tls = false;
-    const char* certificate_path = nullptr;
-    const char* key_path = nullptr;
+    const char *certificate_path = nullptr;
+    const char *key_path = nullptr;
 #endif
 
     /* maplookup doesn't consume the key, so we make some static values to save recreation every time
@@ -2825,8 +3116,8 @@ bf_listen(Var arglist, Byte next, void* vdata, Objid progr) { /* (oid, desc) */
     static Var tls_key_key = str_dup_to_var("key");
 #endif
 
-    if (arglist.v.list[0].v.num >= 3) {
-        Var options = arglist.v.list[3];
+    if (arglist.length() >= 3) {
+        Var options = arglist[3];
         Var value;
 
 #ifdef USE_TLS
@@ -2863,6 +3154,9 @@ bf_listen(Var arglist, Byte next, void* vdata, Objid progr) { /* (oid, desc) */
 
         if (maplookup(options, print_messages_key, &value, 0) != nullptr && is_true(value))
             print_messages = 1;
+
+        if (maplookup(options, interface_key, &value, 0) != nullptr && value.type == TYPE_STR)
+            interface = value.v.str;
     }
 
     if (e == E_NONE) {
@@ -2872,7 +3166,7 @@ bf_listen(Var arglist, Byte next, void* vdata, Objid progr) { /* (oid, desc) */
         } else if (!valid(oid) || find_slistener(desc, ipv6)) {
             e = E_INVARG;
             sprintf(error_msg, "Invalid argument");
-        } else if (!(l = new_slistener(oid, desc, print_messages, &e, ipv6 USE_TLS_BOOL TLS_CERT_PATH))) {
+        } else if (!(l = new_slistener(oid, desc, print_messages, &e, ipv6, interface USE_TLS_BOOL TLS_CERT_PATH))) {
             sprintf(error_msg, unparse_error(e));
             /* Do nothing; e is already set */
         } else if (!start_listener(l)) {
@@ -2897,11 +3191,12 @@ bf_listen(Var arglist, Byte next, void* vdata, Objid progr) { /* (oid, desc) */
 }
 
 static package
-bf_unlisten(Var arglist, Byte next, void* vdata, Objid progr) { /* (desc) */
-    Var desc = arglist.v.list[1];
-    bool ipv6 = arglist.v.list[0].v.num >= 2 && is_true(arglist.v.list[2]);
+bf_unlisten(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (desc) */
+    Var desc = arglist[1];
+    bool ipv6 = arglist.length() >= 2 && is_true(arglist[2]);
     enum error e = E_NONE;
-    slistener* l = nullptr;
+    slistener *l = nullptr;
 
     if (!is_wizard(progr))
         e = E_PERM;
@@ -2917,25 +3212,27 @@ bf_unlisten(Var arglist, Byte next, void* vdata, Objid progr) { /* (desc) */
 }
 
 static package
-bf_listeners(Var arglist, Byte next, void* vdata, Objid progr) { /* (find) */
-    const int nargs = arglist.v.list[0].v.num;
+bf_listeners(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (find) */
+    const int nargs = arglist.length();
     Var entry, list = new_list(0);
     bool find_listener = nargs == 1 ? true : false;
-    const Var find = find_listener ? arglist.v.list[1] : var_ref(zero);
-    slistener* l;
+    const Var find = find_listener ? arglist[1] : var_ref(zero);
+    slistener *l;
 
-    // Save the keys for later
+// Save the keys for later
     static const Var object = str_dup_to_var("object");
-    static const Var port = str_dup_to_var("port");
-    static const Var print = str_dup_to_var("print_messages");
+    static const Var port   = str_dup_to_var("port");
+    static const Var print  = str_dup_to_var("print-messages");
 
     for (l = all_slisteners; l; l = l->next) {
         if (!find_listener || equality(find, (find.type == TYPE_OBJ) ? Var::new_obj(l->oid) : l->desc, 0)) {
-            entry = new_map();
+            entry = new_map(6);
             entry = mapinsert(entry, var_ref(object), Var::new_obj(l->oid));
             entry = mapinsert(entry, var_ref(port), var_ref(l->desc));
             entry = mapinsert(entry, var_ref(print), Var::new_int(l->print_messages));
             entry = mapinsert(entry, var_ref(ipv6_key), Var::new_int(l->ipv6));
+            entry = mapinsert(entry, var_ref(interface_key), str_dup_to_var(l->name));
 #ifdef USE_TLS
             entry = mapinsert(entry, var_ref(tls_key), Var::new_int(nlistener_is_tls(l->nlistener.ptr)));
 #endif
@@ -2948,9 +3245,10 @@ bf_listeners(Var arglist, Byte next, void* vdata, Objid progr) { /* (find) */
 }
 
 static package
-bf_buffered_output_length(Var arglist, Byte next, void* vdata, Objid progr) { /* ([connection]) */
-    int nargs = arglist.v.list[0].v.num;
-    Objid conn = nargs >= 1 ? arglist.v.list[1].v.obj : 0;
+bf_buffered_output_length(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* ([connection]) */
+    int nargs = arglist.length();
+    Objid conn = nargs >= 1 ? arglist[1].v.obj : 0;
     Var r;
 
     free_var(arglist);
@@ -2958,7 +3256,7 @@ bf_buffered_output_length(Var arglist, Byte next, void* vdata, Objid progr) { /*
     if (nargs == 0)
         r.v.num = server_flag_option_cached(SVO_MAX_QUEUED_OUTPUT);
     else {
-        shandle* h = find_shandle(conn);
+        shandle *h = find_shandle(conn);
 
         if (!h)
             return make_error_pack(E_INVARG);
@@ -2971,29 +3269,45 @@ bf_buffered_output_length(Var arglist, Byte next, void* vdata, Objid progr) { /*
     return make_var_pack(r);
 }
 
-void register_server(void) {
+bool is_shutdown_triggered()
+{
+    return shutdown_triggered;
+}
+
+void
+register_server(void)
+{
     register_function("server_version", 0, 1, bf_server_version, TYPE_ANY);
     register_function("renumber", 1, 1, bf_renumber, TYPE_OBJ);
     register_function("reset_max_object", 0, 0, bf_reset_max_object);
     register_function("memory_usage", 0, 0, bf_memory_usage);
+#ifdef JEMALLOC_FOUND
+    register_function("malloc_stats", 0, 0, bf_malloc_stats);
+#endif
     register_function("usage", 0, 0, bf_usage);
     register_function("panic", 0, 1, bf_panic, TYPE_STR);
     register_function("shutdown", 0, 1, bf_shutdown, TYPE_STR);
     register_function("dump_database", 0, 0, bf_dump_database);
     register_function("db_disk_size", 0, 0, bf_db_disk_size);
-    register_function("open_network_connection", 2, 3, bf_open_network_connection, TYPE_STR, TYPE_INT, TYPE_MAP);
-    register_function("connected_players", 0, 1, bf_connected_players, TYPE_ANY);
-    register_function("connected_seconds", 1, 1, bf_connected_seconds, TYPE_OBJ);
+    register_function("open_network_connection", 2, 3, bf_open_network_connection,
+                      TYPE_STR, TYPE_INT, TYPE_MAP);
+    register_function("connected_players", 0, 1, bf_connected_players,
+                      TYPE_ANY);
+    register_function("connected_seconds", 1, 1, bf_connected_seconds,
+                      TYPE_OBJ);
     register_function("idle_seconds", 1, 1, bf_idle_seconds, TYPE_OBJ);
     register_function("connection_name", 1, 2, bf_connection_name, TYPE_OBJ, TYPE_INT);
     register_function("notify", 2, 4, bf_notify, TYPE_OBJ, TYPE_STR, TYPE_ANY, TYPE_ANY);
     register_function("boot_player", 1, 1, bf_boot_player, TYPE_OBJ);
-    register_function("set_connection_option", 3, 3, bf_set_connection_option, TYPE_OBJ, TYPE_STR, TYPE_ANY);
-    register_function("connection_options", 1, 2, bf_connection_options, TYPE_OBJ, TYPE_STR);
+    register_function("set_connection_option", 3, 3, bf_set_connection_option,
+                      TYPE_OBJ, TYPE_STR, TYPE_ANY);
+    register_function("connection_options", 1, 2, bf_connection_options,
+                      TYPE_OBJ, TYPE_STR);
     register_function("connection_info", 1, 1, bf_connection_info, TYPE_OBJ);
     register_function("connection_name_lookup", 1, 2, bf_name_lookup, TYPE_OBJ, TYPE_ANY);
     register_function("listen", 2, 3, bf_listen, TYPE_OBJ, TYPE_ANY, TYPE_MAP);
     register_function("unlisten", 1, 2, bf_unlisten, TYPE_ANY, TYPE_ANY);
     register_function("listeners", 0, 1, bf_listeners, TYPE_ANY);
-    register_function("buffered_output_length", 0, 1, bf_buffered_output_length, TYPE_OBJ);
+    register_function("buffered_output_length", 0, 1,
+                      bf_buffered_output_length, TYPE_OBJ);
 }

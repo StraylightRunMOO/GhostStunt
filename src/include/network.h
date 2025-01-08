@@ -25,6 +25,7 @@
 
 #include "structures.h"
 #include "streams.h"
+#include "functions.h"
 #include <netdb.h>      // sa_family_t
 
 /* These get set by command-line options in server.cc */
@@ -53,6 +54,8 @@ typedef struct {		/* Network's handle on a listening point */
     void *ptr;
 } network_listener;
 
+struct nhandle; /* Forward declaration of nhandle. */
+
 #include "server.h"		/* Include this *after* defining the types */
 
 struct proto {
@@ -75,7 +78,7 @@ struct proto {
 
 extern enum error make_listener(Var desc, int *fd,
 				      const char **name, const char **ip_address,
-					  uint16_t *port, const bool use_ipv6);
+					  uint16_t *port, const bool use_ipv6, const char *interface);
 				/* DESC is the second argument in a call to the
 				 * built-in MOO function `listen()'; it should
 				 * be used as a specification of a new local
@@ -125,7 +128,7 @@ extern enum accept_error
 
 #ifdef OUTBOUND_NETWORK
 
-extern enum error open_connection(Var arglist,
+extern package open_connection(Var arglist,
 					int *read_fd, int *write_fd,
 					const char **name, const char **ip_addr,
 					uint16_t *port, sa_family_t *protocol, bool use_ipv6 USE_TLS_BOOL_DEF SSL_CONTEXT_2_DEF);
@@ -175,7 +178,8 @@ extern int network_initialize(int argc, char **argv,
 extern enum error network_make_listener(server_listener sl, Var desc,
 					network_listener * nl, 
 					const char **name, const char **ip_address,
-					uint16_t *port, bool use_ipv6 USE_TLS_BOOL_DEF TLS_CERT_PATH_DEF);
+					uint16_t *port, bool use_ipv6, const char *interface 
+					USE_TLS_BOOL_DEF TLS_CERT_PATH_DEF);
 				/* DESC is the second argument in a call to the
 				 * built-in MOO function `listen()'; it should
 				 * be used as a specification of a new local
@@ -340,8 +344,10 @@ extern int network_set_connection_option(network_handle nh,
 				 * the given setting if valid.
 				 */
 
+int network_set_client_keep_alive(network_handle nh, Var map);
+
 #ifdef OUTBOUND_NETWORK
-extern enum error network_open_connection(Var arglist, server_listener sl, bool use_ipv6 USE_TLS_BOOL_DEF);
+extern package network_open_connection(Var arglist, server_listener sl, bool use_ipv6 USE_TLS_BOOL_DEF);
 				/* The given MOO arguments should be used as a
 				 * specification of a remote network connection
 				 * to be made.  If the arguments are OK and the
@@ -428,15 +434,22 @@ extern int network_set_nonblocking(int fd);
 				 */
 #endif
 
-extern int rewrite_connection_name(network_handle nh, const char *destination, const char *destination_port, const char *source, const char *source_port);
-extern int network_name_lookup_rewrite(Objid obj, const char *name);
-extern bool network_is_localhost(network_handle nh);
-				/* Return true if the network handle's destination IP address
-				   is coming from 127.0.0.1 or ::1 */
+extern int rewrite_connection_name(const network_handle nh, const char *destination, const char *destination_port, const char *source, const char *source_port);
+extern int network_name_lookup_rewrite(const Objid obj, const char *name, const network_handle nh);
 extern void lock_connection_name_mutex(const network_handle nh);
 extern void unlock_connection_name_mutex(const network_handle nh);
 extern void increment_nhandle_refcount(const network_handle nh);
 extern void decrement_nhandle_refcount(const network_handle nh);
-extern int nhandle_refcount(const network_handle nh);
+extern uint32_t get_nhandle_refcount(const network_handle nh);
+extern uint32_t get_nhandle_refcount(nhandle *h);
+extern uint32_t nhandle_refcount(const network_handle nh);
+
+static inline bool fd_is_readable(const nhandle *h);
+				/* Return true iff the most recent mplex_wait()
+				 * call terminated (in part) because reading
+				 * had become possible on the given descriptor.
+				 * OR if the given descriptor has pending TLS
+				 */
+
 
 #endif				/* Network_H */

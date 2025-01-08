@@ -226,24 +226,17 @@ alloc_waif_propvals(Waif *w, int clear)
 }
 
 static int
-map_refers_to(Var key, Var value, void *data, int first)
-{
-    Var *new_var = (Var*)data;
-    return refers_to(key, *new_var, true) || refers_to(value, *new_var, true);
-}
-
-static int
 refers_to(Var target, Var key, bool waif_self_check)
 {
     int i;
     Var *p;
 
-    switch ((int) target.type) {
+    switch (target.type) {
         case TYPE_LIST:
             if (target.v.list == key.v.list)
                 return 1;
-            for (i = 1; i <= target.v.list[0].v.num; ++i)
-                if (refers_to(target.v.list[i], key, true))
+            for (i = 1; i <= target.length(); ++i)
+                if (refers_to(target[i], key, true))
                     return 1;
             return 0;
         case TYPE_WAIF:
@@ -260,10 +253,11 @@ refers_to(Var target, Var key, bool waif_self_check)
         case TYPE_STR:
             return target.v.str == key.v.str;
         case TYPE_MAP:
-            return mapforeach(target, map_refers_to, &key);
-
-
+            return mapforeach(target, [&key](Var k, Var v, int index) -> int {
+                return refers_to(k, key, true) || refers_to(v, key, true);
+            });
     }
+
     return 0;
 }
 
@@ -624,7 +618,7 @@ bf_waif_stats(Var arglist, Byte next, void *vdata, Objid progr)
 {
     free_var(arglist);
 
-    Var r = new_map();
+    Var r = new_map(0);
     r = mapinsert(r, str_dup_to_var("total"), Var::new_int(waif_count));
     r = mapinsert(r, str_dup_to_var("pending_recycle"), Var::new_int(destroyed_waifs.size()));
 
@@ -840,7 +834,7 @@ waif_bytes(Waif *w)
      * be sharing that with the class object which is billed for that
      * space
      */
-    len = sizeof(Waif);
+    len = sizeof(*w);
     cnt = count_waif_propvals(w);
     while (cnt--)
         len += value_bytes(w->propvals[cnt]);

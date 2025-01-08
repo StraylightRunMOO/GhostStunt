@@ -23,12 +23,13 @@
  * complete set of procedures that a network implementation must provide.
  */
 
-
 #ifndef Server_H
 #define Server_H 1
 
 #include <stdio.h>
+
 #include "config.h"
+#include "options.h"
 
 typedef struct {		/* Server's handle on a connection */
     void *ptr;
@@ -39,18 +40,18 @@ typedef struct {		/* Server's handle on a listening point */
 } server_listener;
 
 #include "network.h"		/* Include this *after* defining the types */
-#ifdef CUSTOM_ALLOC
+
+#ifdef USE_RPMALLOC
 
 extern "C" {
-	#include "../dependencies/rpmalloc.h"
+    #include "../dependencies/rpmalloc/rpmalloc.h"
 }
 
 static void alloc_init() {
-	rpmalloc_config_t config = {0};
-	config.enable_huge_pages = 1;
-	config.span_map_count    = 64;
-	config.page_size         = 4*1024*1024;
-	rpmalloc_initialize_config(&config);
+    rpmalloc_config_t config = {0};
+    config.enable_huge_pages = ALLOC_ENABLE_HUGE;
+    config.page_size         = ALLOC_PAGE_SIZE;
+    rpmalloc_initialize_config(0, &config);
 }
 
 static void alloc_finalize() {
@@ -59,12 +60,12 @@ static void alloc_finalize() {
 
 #else 
 
-static void initialize_allocator() {
+static void alloc_init() {
 	;
 }
 
-static void finalize_allocator() {
-	;
+static void alloc_finalize() {
+    ;
 }
 
 #endif
@@ -196,10 +197,12 @@ extern int read_values_pending_finalization(void);
  * of the server module from the network implementation.
  */
 extern int find_network_handle(Objid obj, network_handle **handle);
+extern bool is_shutdown_triggered();
 /***************************************************************/
 
 #include "streams.h"
-bool is_localhost(Objid connection);
+bool is_trusted_proxy(Objid connection);
+/* Is the connecting IP a trusted proxy ($server_options.trusted_proxies) */
 int proxy_connected(Objid connection, char *command);
 
 #include "db.h"
@@ -391,10 +394,10 @@ extern int read_active_connections(void);
 				    GETVALUE, SETVALUE)						\
     {														\
 	Var pair = new_list(2);									\
-	pair.v.list[1].type = TYPE_STR;							\
-	pair.v.list[1].v.str = str_dup(#NAME);					\
-	pair.v.list[2].type = (TYPE_FOO);						\
-	pair.v.list[2].v.VFOO_MEMBER = (GETVALUE);				\
+	pair[1].type = TYPE_STR;							\
+	pair[1].v.str = str_dup(#NAME);					\
+	pair[2].type = (TYPE_FOO);						\
+	pair[2].v.VFOO_MEMBER = (GETVALUE);				\
 	LIST = listappend(LIST, pair);							\
     }														\
 

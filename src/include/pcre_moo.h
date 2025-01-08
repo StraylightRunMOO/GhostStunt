@@ -18,12 +18,18 @@ struct pcre_cache_entry {
     pcre_extra *extra;
     int captures;
     unsigned int cache_hits;
+    std::atomic_uint refcount;
 };
 
+typedef std::pair<const char*, unsigned char> cache_type;
+
+static void free_entry(pcre_cache_entry *);
+static void delete_cache_entry(const char *pattern, unsigned char options);
+static Var result_indices(int ovector[], int n);
 extern void pcre_shutdown(void);
 
 #ifdef SQLITE3_FOUND
-#include <sqlite3.h>
+#include <sqlite3ext.h>
 extern void sqlite_regexp(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 #endif
 

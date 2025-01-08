@@ -15,8 +15,6 @@
     Pavel@Xerox.Com
  *****************************************************************************/
 
-#include "storage.h"
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,15 +23,18 @@
 #include "log.h"
 #include "options.h"
 #include "server.h"
+#include "storage.h"
 #include "structures.h"
 #include "utils.h"
 
-#ifdef CUSTOM_ALLOC
-    #include "dependencies/rpmalloc.h"
+#ifdef USE_RPMALLOC
+    #include "dependencies/rpmalloc/rpmalloc.h"
+    #include "dependencies/rpmalloc/rpnew.h"
 #endif
 
 static inline int
-refcount_overhead(Memory_Type type) {
+refcount_overhead(Memory_Type type)
+{
     /* These are the only allocation types that are addref()'d.
      * As long as we're living on the wild side, avoid getting the
      * refcount slot for allocations that won't need it.
@@ -46,29 +47,13 @@ refcount_overhead(Memory_Type type) {
         case M_TRAV:
         case M_ANON:
         case M_WAIF:
-            total = MAX(sizeof(refcount_t), sizeof(Var*));
-            break;
+        case M_CALL:
         case M_STRING:
-            total = sizeof(refcount_t);
+            total = sizeof(var_metadata);
             break;
         default:
             total = 0;
     }
-
-    #ifdef MEMO_VALUE_BYTES
-        if (type == M_LIST || type == M_TREE)
-            total += MAX(sizeof(int), sizeof(int *));
-    #endif
-
-    #ifdef MEMO_STRLEN
-        if (type == M_STRING)
-            total += MAX(sizeof(int), sizeof(int *));
-    #endif
-
-    #ifdef ENABLE_GC
-        if (type == M_LIST || type == M_TREE || type == M_ANON)
-            total += MAX(sizeof(gc_overhead), sizeof(gc_overhead *));
-    #endif
 
     return total;
 }
@@ -77,67 +62,130 @@ void *
 mymalloc(unsigned size, Memory_Type type)
 {
     char *memptr;
-    int offs = refcount_overhead(type);
+    char msg[100];
+    int offs;
 
     if (size == 0)      /* For queasy systems */
         size = 1;
-    else if(type == M_LIST && !(IS_POWER_OF_TWO(size)))
-        size = next_power_of_two((size / sizeof(Var))) * sizeof(Var);
-
-    #ifdef CUSTOM_ALLOC
-      memptr = (char *) rpmalloc(offs + size);
+    
+    offs = refcount_overhead(type);
+    
+    #ifdef USE_RPMALLOC
+      memptr = (char *)rpmalloc(offs + size);
     #else
-      memptr = (char *) malloc(offs + size);
+      memptr = (char *)malloc(offs + size);
     #endif
 
     if (!memptr) {
-        char msg[100];
-        sprintf(msg, "memory allocation (size %u) failed!", size);
+        sprintf(msg, "memory allocation (size %u) failed!", offs + size);
         panic_moo(msg);
     }
 
     if (offs) {
         memptr += offs;
-        ((refcount_t *)memptr)[REFCOUNT_OFFSET] = 1;
-        #ifdef ENABLE_GC
-            if (type == M_LIST || type == M_TREE || type == M_ANON) {
-                ((gc_overhead *)memptr)[GC_OFFSET].buffered = 0;
-                ((gc_overhead *)memptr)[GC_OFFSET].color = (type == M_ANON) ? GC_BLACK : GC_GREEN;
-            }
-        #endif /* ENABLE_GC */
-        #ifdef MEMO_STRLEN
-            if (type == M_STRING)
-                ((int *) memptr)[MEMO_OFFSET] = size - 1;
-        #endif /* MEMO_STRLEN */
-        #ifdef MEMO_VALUE_BYTES
-            if (type == M_LIST || type == M_TREE)
-                ((int *) memptr)[MEMO_OFFSET] = 0;
-        #endif /* MEMO_VALUE_BYTES */
+        var_metadata *metadata = (var_metadata *)(memptr - sizeof(var_metadata));
+
+        metadata->refcount = 1;
+
+#ifdef ENABLE_GC
+        if (type == M_LIST || type == M_TREE || type == M_ANON) {
+            metadata->buffered = 0;
+            metadata->color = (type == M_ANON) ? GC_BLACK : GC_GREEN;
+        }
+#endif /* ENABLE_GC */
+
+#ifdef MEMO_SIZE
+        if (type == M_STRING)
+            metadata->size = size - 1;
+#endif /* MEMO_SIZE */
+
+#ifdef MEMO_SIZE
+        if (type == M_LIST || type == M_TREE)
+            metadata->size = 0;
+#endif /* MEMO_SIZE */
+
     }
     return memptr;
 }
 
+void *
+mycalloc(unsigned count, unsigned size, Memory_Type type)
+{
+    char *memptr;
+    char msg[100];
+    int offs;
+
+    if (size == 0)      /* For queasy systems */
+        size = 1;
+    
+    offs = refcount_overhead(type);
+
+    #ifdef USE_RPMALLOC
+        memptr = (char *)rpcalloc(count, offs + size);
+    #else
+        memptr = (char *) calloc(count, offs + size);
+    #endif
+
+    if (!memptr) {
+        sprintf(msg, "memory allocation (size %u) failed!", offs + size);
+        panic_moo(msg);
+    }
+
+    if (offs) {
+        char *metaptr = memptr;
+        memptr += offs;
+
+        for(auto i=0; i<count; i++) {
+            metaptr += offs;
+            var_metadata *metadata = (var_metadata *)(metaptr - sizeof(var_metadata));
+            metadata->refcount = 1;
+
+    #ifdef ENABLE_GC
+            if (type == M_LIST || type == M_TREE || type == M_ANON) {
+                metadata->buffered = 0;
+                metadata->color = (type == M_ANON) ? GC_BLACK : GC_GREEN;
+            }
+    #endif /* ENABLE_GC */
+
+    #ifdef MEMO_SIZE
+            if (type == M_STRING)
+                metadata->size = size - 1;
+    #endif /* MEMO_SIZE */
+
+    #ifdef MEMO_SIZE
+            if (type == M_LIST || type == M_TREE)
+                metadata->size = 0;
+    #endif /* MEMO_SIZE */
+        }
+
+    }
+
+    return memptr;
+}
+
 const char *
-str_ref(const char *s) {
+str_ref(const char *s)
+{
     addref(s);
     return s;
 }
 
 char *
-str_dup(const char *s) {
+str_dup(const char *s)
+{
     char *r;
 
     if (s == nullptr || *s == '\0') {
         static char *emptystring;
 
         if (!emptystring) {
-            emptystring = (char *)mymalloc(1, M_STRING);
+            emptystring = (char *) mymalloc(1, M_STRING);
             *emptystring = '\0';
         }
         addref(emptystring);
         return emptystring;
     } else {
-        r = (char *)mymalloc(strlen(s) + 1, M_STRING); /* NO MEMO HERE */
+        r = (char *) mymalloc(strlen(s) + 1, M_STRING); /* NO MEMO HERE */
         strcpy(r, s);
     }
     return r;
@@ -146,19 +194,16 @@ str_dup(const char *s) {
 void *
 myrealloc(void *ptr, unsigned size, Memory_Type type)
 {
-    if(type == M_LIST && !(IS_POWER_OF_TWO(size)))
-        size = next_power_of_two((size / sizeof(Var))) * sizeof(Var);
-
     int offs = refcount_overhead(type);
+    static char msg[100];
 
-    #ifdef CUSTOM_ALLOC
+    #ifdef USE_RPMALLOC
       ptr = rprealloc((char *)ptr - offs, size + offs);
     #else
       ptr = realloc((char *) ptr - offs, size + offs);
     #endif 
 
     if (!ptr) {
-        static char msg[100];
         sprintf(msg, "memory re-allocation (size %u) failed!", size);
         panic_moo(msg);
     }
@@ -169,7 +214,7 @@ myrealloc(void *ptr, unsigned size, Memory_Type type)
 void
 myfree(void *ptr, Memory_Type type)
 {
-    #ifdef CUSTOM_ALLOC
+    #ifdef USE_RPMALLOC
       rpfree((char *)ptr - refcount_overhead(type));
     #else
       free((char *) ptr - refcount_overhead(type));
