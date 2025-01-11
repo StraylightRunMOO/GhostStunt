@@ -5,7 +5,7 @@ LABEL maintainer="Damus <damus@straylightrun.org>"
 # Install and configure toolchain
 RUN apk add --no-cache argon2-dev aspell-dev binutils \
   build-base clang clang-dev cmake curl-dev make \
-  nettle-dev openssl-dev pcre-dev sqlite-dev \
+  nettle-dev openssl-dev pcre-dev sqlite-dev bison gperf \
   && clang --version
 
 RUN ln -sf /usr/bin/clang   /usr/bin/cc

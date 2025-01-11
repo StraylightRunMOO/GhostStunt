@@ -29,7 +29,7 @@ static Var result_indices(int ovector[], int n);
 extern void pcre_shutdown(void);
 
 #ifdef SQLITE3_FOUND
-#include <sqlite3ext.h>
+#include <sqlite3.h>
 extern void sqlite_regexp(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 #endif
 
