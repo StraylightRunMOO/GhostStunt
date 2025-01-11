@@ -265,13 +265,8 @@ int proxy_connected(Objid connection, char *command);
 	  flag, 0, /* already canonical */								\
       )																\
                                                                     \
-  																	\
-  DEFINE( SVO_MATCH_ALIASES_VERB, match_aliases_verb,				\
-  	flag, 0,														\
-  	)																\
-																	\
-  DEFINE( SVO_MATCH_CONTENTS_VERB, match_contents_verb,				\
-  	flag, 0,														\
+  DEFINE( SVO_MATCH_MODE, match_mode,               				\
+  	int, 0,			    											\
   	)																\
 																	\
   DEFINE( SVO_CORIFY_OBJ_TOSTR, corify_obj_tostr,		     		\
