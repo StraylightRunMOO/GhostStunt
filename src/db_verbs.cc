@@ -371,6 +371,12 @@ static int vc_size = 0;
 void
 db_priv_affected_callable_verb_lookup(void)
 {
+
+#ifdef VERB_CACHE
+    free_var(verb_cache);
+    verb_cache = new_map(0);
+#endif
+
     int i;
     vc_entry *vc, *vc_next;
 

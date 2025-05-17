@@ -668,4 +668,3 @@ register_sqlite() {
 void register_sqlite(void) { }
 void sqlite_shutdown(void) { }
 #endif
-

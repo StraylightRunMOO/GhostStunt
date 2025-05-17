@@ -105,7 +105,7 @@ typedef struct Object {
 
 /*********** Verb cache support ***********/
 
-#define VERB_CACHE 1
+#define VERB_CACHE
 
 #ifdef VERB_CACHE
 

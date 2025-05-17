@@ -1559,8 +1559,6 @@ bf_file_count_lines(Var arglist, Byte next, void *vdata, Objid progr)
     return r;
 }
 
-/************************************************************************/
-
 void
 register_fileio(void)
 {

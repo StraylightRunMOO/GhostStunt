@@ -59,12 +59,14 @@
  * can be found in /src/dependencies/rpmalloc.c
 */
 
+/*
 #define USE_RPMALLOC
 
 #ifdef USE_RPMALLOC
   #define ALLOC_PAGE_SIZE   0
   #define ALLOC_ENABLE_HUGE 1
 #endif 
+*/
 
 /******************************************************************************
  * Define LOG_GC_STATS to enabled logging of reference cycle collection
@@ -538,8 +540,8 @@
  ******************************************************************************
  */
 
-#define TOTAL_BACKGROUND_THREADS    2
-#define DEFAULT_THREAD_MODE         true
+#define TOTAL_BACKGROUND_THREADS    0
+#define DEFAULT_THREAD_MODE         false
 
 /******************************************************************************
  * By default, the server will resolve DNS hostnames from IP addresses for all

@@ -58,7 +58,6 @@ Program *
 program_ref(Program * p)
 {
     p->ref_count++;
-
     return p;
 }
 

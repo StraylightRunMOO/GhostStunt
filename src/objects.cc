@@ -1205,6 +1205,7 @@ static inline Var object_contents(Var v) {
     return o != nullptr ? var_ref(dbpriv_object_contents(o)) : new_list(0);
 }
 
+/*
 static package
 bf_all_contents(Var arglist, Byte next, void *vdata, Objid progr)
 {
@@ -1231,6 +1232,50 @@ bf_all_contents(Var arglist, Byte next, void *vdata, Objid progr)
     free_var(arglist);
     return make_var_pack(r);
 }
+*/
+
+
+static package
+bf_all_contents(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var o = arglist[1];
+
+    if(!is_valid(o)) {
+        free_var(arglist);
+        return make_error_pack(E_INVIND);
+    }
+
+    int nargs = arglist.length();
+    bool one_parent = nargs == 1 ? false : true;
+if (nargs == 2 && !valid(arglist.v.list[2].v.obj))
+        {
+            free_var(arglist);
+            return make_error_pack(E_INVIND);
+        }
+    Var parent = one_parent ? arglist.v.list[2] : nothing;
+    free_var(arglist);
+    Var r = object_contents(o);
+    for(auto i=1; i<=r.length(); i++)
+        r = listconcat(r, object_contents(r[i]));
+
+    if (!one_parent) {
+        return make_var_pack(r);
+    }
+    else {
+        Var result = new_list(r.length());
+        for (int x = 1; x <= r.length(); x++) {
+            Objid oid = r[x].v.obj;
+            if (db_object_isa(var_dup(r[x]), var_dup(parent)))
+                {
+                result = setadd(result, r[x]);
+            }
+        }
+        return make_var_pack(result);
+        }
+}
+
+
+
 
 static inline Var corified_make_map()
 {
