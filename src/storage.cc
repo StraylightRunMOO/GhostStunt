@@ -198,7 +198,10 @@ myrealloc(void *ptr, unsigned size, Memory_Type type)
     static char msg[100];
 
     #ifdef USE_RPMALLOC
-      ptr = rprealloc((char *)ptr - offs, size + offs);
+      if(rpmalloc_usable_size((char *)ptr - refcount_overhead(type)) > 0)
+          ptr = rprealloc((char *)ptr - offs, size + offs);
+      else
+          return mymalloc(size, type);
     #else
       ptr = realloc((char *) ptr - offs, size + offs);
     #endif 
@@ -215,7 +218,8 @@ void
 myfree(void *ptr, Memory_Type type)
 {
     #ifdef USE_RPMALLOC
-      rpfree((char *)ptr - refcount_overhead(type));
+      if(rpmalloc_usable_size((char *)ptr - refcount_overhead(type)) > 0)
+        rpfree((char *)ptr - refcount_overhead(type));
     #else
       free((char *) ptr - refcount_overhead(type));
     #endif

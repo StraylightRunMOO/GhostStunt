@@ -229,7 +229,7 @@ file_make_error(const char *errtype, const char *msg) {
     Var value;
 
     value.type = TYPE_STR;
-    value.v.str = str_dup(errtype);
+    value.str(str_dup(errtype));
 
     p.kind = package::BI_RAISE;
 
@@ -259,7 +259,7 @@ static package file_raise_notokfilename(const char *funcid, const char *pathname
     Var p;
 
     p.type = TYPE_STR;
-    p.v.str = str_dup(pathname);
+    p.str(str_dup(pathname));
     return make_raise_pack(E_INVARG, "Invalid pathname", p);
 }
 
@@ -351,8 +351,8 @@ bf_file_open(Var arglist, Byte next, void *vdata, Objid progr)
     package r;
     Var fhandle;
     const char *real_filename;
-    const char *filename = arglist[1].v.str;
-    const char *mode = arglist[2].v.str;
+    const char *filename = arglist[1].str();
+    const char *mode = arglist[2].str();
     const char *fmode;
     file_mode rmode;
     file_type type;
@@ -424,7 +424,7 @@ bf_file_name(Var arglist, Byte next, void *vdata, Objid progr)
         r = make_raise_pack(E_INVARG, "Invalid FHANDLE", var_ref(fhandle));
     } else {
         rv.type = TYPE_STR;
-        rv.v.str = str_dup(name);
+        rv.str(str_dup(name));
         r = make_var_pack(rv);
     }
     free_var(arglist);
@@ -470,7 +470,7 @@ bf_file_openmode(Var arglist, Byte next, void *vdata, Objid progr)
 
 
         rv.type = TYPE_STR;
-        rv.v.str = str_dup(buffer);
+        rv.str(str_dup(buffer));
         r = make_var_pack(rv);
     }
     free_var(arglist);
@@ -532,12 +532,12 @@ bf_file_readline(Var arglist, Byte next, void *vdata, Objid progr)
             rv.type = TYPE_STR;
 #ifndef UNSAFE_FIO
             file_type type = file_handle_type(fhandle);
-            rv.v.str = str_dup((type->in_filter)(line, len));
+            rv.str(str_dup((type->in_filter)(line, len)));
 #else
             /* For good reason, you can't modify a const char. But shh, we're doing it anyway. */
             char *dirty_hack = (char*)line;
             dirty_hack[len - 1] = '\0';
-            rv.v.str = str_dup(dirty_hack);
+            rv.str(str_dup(dirty_hack));
 #endif
             r = make_var_pack(rv);
         }
@@ -650,7 +650,7 @@ bf_file_readlines(Var arglist, Byte next, void *vdata, Objid progr)
                 i = 1;
                 while (linebuf_cur != nullptr) {
                     rv[i].type = TYPE_STR;
-                    rv[i].v.str = linebuf_cur->line;
+                    rv[i].str(linebuf_cur->line);
                     linebuf_cur = linebuf_cur->next;
                     i++;
                 }
@@ -673,7 +673,7 @@ bf_file_writeline(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
     Var fhandle = arglist[1];
-    const char *buffer = arglist[2].v.str;
+    const char *buffer = arglist[2].str();
     const char *rawbuffer;
     file_mode mode;
     file_type type;
@@ -775,7 +775,7 @@ try_again:
             stream_add_string(str, (type->in_filter)(buffer, read));
 
             rv.type = TYPE_STR;
-            rv.v.str = str_dup(reset_stream(str));
+            rv.str(str_dup(reset_stream(str)));
 
             r = make_var_pack(rv);
         }
@@ -821,7 +821,7 @@ bf_file_write(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
     Var fhandle = arglist[1], rv;
-    const char *buffer = arglist[2].v.str;
+    const char *buffer = arglist[2].str();
     const char *rawbuffer;
     file_mode mode;
     file_type type;
@@ -871,7 +871,7 @@ bf_file_seek(Var arglist, Byte next, void *vdata, Objid progr)
     package r;
     Var fhandle = arglist[1];
     Num seek_to = arglist[2].v.num;
-    const char *whence = arglist[3].v.str;
+    const char *whence = arglist[3].str();
     int whnce = 0, whence_ok = 1;
     FILE *f;
 
@@ -972,7 +972,7 @@ static int file_stat(Objid progr, Var filespec, package *r, struct stat *buf) {
     if (!file_verify_caller(progr)) {
         *r = file_raise_notokcall("file_stat", progr);
     } else if (filespec.type == TYPE_STR) {
-        const char *filename = filespec.v.str;
+        const char *filename = filespec.str();
         const char *real_filename;
 
         if ((real_filename = file_resolve_path(filename)) == nullptr) {
@@ -1059,7 +1059,7 @@ bf_file_mode(Var arglist, Byte next, void *vdata, Objid progr)
 
     if (file_stat(progr, filespec, &r, &buf)) {
         rv.type = TYPE_STR;
-        rv.v.str = str_dup(file_mode_string(buf.st_mode));
+        rv.str(str_dup(file_mode_string(buf.st_mode)));
         r = make_var_pack(rv);
     }
     free_var(arglist);
@@ -1081,7 +1081,7 @@ bf_file_type(Var arglist, Byte next, void *vdata, Objid progr)
 
     if (file_stat(progr, filespec, &r, &buf)) {
         rv.type = TYPE_STR;
-        rv.v.str = str_dup(file_type_string(buf.st_mode));
+        rv.str(str_dup(file_type_string(buf.st_mode)));
         r = make_var_pack(rv);
     }
     free_var(arglist);
@@ -1169,22 +1169,16 @@ bf_file_stat(Var arglist, Byte next, void *vdata, Objid progr)
 
     if (file_stat(progr, filespec, &r, &buf)) {
         rv = new_list(8);
-        rv[1].type = TYPE_INT;
-        rv[1].v.num = buf.st_size;
-        rv[2].type = TYPE_STR;
-        rv[2].v.str = str_dup(file_type_string(buf.st_mode));
-        rv[3].type = TYPE_STR;
-        rv[3].v.str = str_dup(file_mode_string(buf.st_mode));
-        rv[4].type = TYPE_STR;
-        rv[4].v.str = str_dup("");
-        rv[5].type = TYPE_STR;
-        rv[5].v.str = str_dup("");
-        rv[6].type = TYPE_INT;
-        rv[6].v.num = buf.st_atime;
-        rv[7].type = TYPE_INT;
-        rv[7].v.num = buf.st_mtime;
-        rv[8].type = TYPE_INT;
-        rv[8].v.num = buf.st_ctime;
+
+        rv[1] = Var::new_int(buf.st_size);
+        rv[2] = Var::new_str(str_dup(file_type_string(buf.st_mode)));
+        rv[3] = Var::new_str(str_dup(file_mode_string(buf.st_mode)));
+        rv[4] = Var::new_str(str_dup(""));
+        rv[5] = Var::new_str(str_dup(""));
+        rv[6] = Var::new_int(buf.st_atime);
+        rv[7] = Var::new_int(buf.st_mtime);
+        rv[8] = Var::new_int(buf.st_ctime);
+
         r = make_var_pack(rv);
     }
     free_var(arglist);
@@ -1218,7 +1212,7 @@ bf_file_list(Var arglist, Byte next, void *vdata, Objid progr)
        than the original scandir method.   -- AAB 06/03/97
      */
     package r;
-    const char *pathspec = arglist[1].v.str;
+    const char *pathspec = arglist[1].str();
     const char *real_pathname;
     int   detailed = (arglist.length() > 1
                       ? is_true(arglist[2])
@@ -1236,6 +1230,8 @@ bf_file_list(Var arglist, Byte next, void *vdata, Objid progr)
         Var     rv, detail;
         struct dirent *curfile;
 
+        oklog("PATH: %s\n", real_pathname);
+
         if (!(curdir = opendir (real_pathname)))
             r = file_raise_errno(pathspec);
         else {
@@ -1251,18 +1247,13 @@ bf_file_list(Var arglist, Byte next, void *vdata, Objid progr)
                             break;
                         } else {
                             detail = new_list(4);
-                            detail[1].type = TYPE_STR;
-                            detail[1].v.str = str_dup(curfile->d_name);
-                            detail[2].type = TYPE_STR;
-                            detail[2].v.str = str_dup(file_type_string(buf.st_mode));
-                            detail[3].type = TYPE_STR;
-                            detail[3].v.str = str_dup(file_mode_string(buf.st_mode));
-                            detail[4].type = TYPE_INT;
-                            detail[4].v.num = buf.st_size;
+                            detail[1] = Var::new_str(curfile->d_name);
+                            detail[2] = Var::new_str(file_type_string(buf.st_mode));
+                            detail[3] = Var::new_str(file_mode_string(buf.st_mode));
+                            detail[4] = Var::new_int(buf.st_size);
                         }
                     } else {
-                        detail.type = TYPE_STR;
-                        detail.v.str = str_dup(curfile->d_name);
+                        detail = Var::new_str(curfile->d_name);
                     }
                     rv = listappend(rv, detail);
                 }
@@ -1289,7 +1280,7 @@ static package
 bf_file_mkdir(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
-    const char *pathspec = arglist[1].v.str;
+    const char *pathspec = arglist[1].str();
     const char *real_pathname;
 
     if (!file_verify_caller(progr)) {
@@ -1315,7 +1306,7 @@ static package
 bf_file_rmdir(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
-    const char *pathspec = arglist[1].v.str;
+    const char *pathspec = arglist[1].str();
     const char *real_pathname;
 
     if (!file_verify_caller(progr)) {
@@ -1341,7 +1332,7 @@ static package
 bf_file_remove(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
-    const char *pathspec = arglist[1].v.str;
+    const char *pathspec = arglist[1].str();
     const char *real_pathname;
 
     if (!file_verify_caller(progr)) {
@@ -1366,8 +1357,8 @@ static package
 bf_file_rename(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
-    const char *fromspec = arglist[1].v.str;
-    const char *tospec = arglist[2].v.str;
+    const char *fromspec = arglist[1].str();
+    const char *tospec = arglist[2].str();
     char *real_fromspec = nullptr;
     const char *real_tospec;
 
@@ -1421,8 +1412,8 @@ static package
 bf_file_chmod(Var arglist, Byte next, void *vdata, Objid progr)
 {
     package r;
-    const char *pathspec = arglist[1].v.str;
-    const char *modespec = arglist[2].v.str;
+    const char *pathspec = arglist[1].str();
+    const char *modespec = arglist[2].str();
     mode_t newmode;
     const char *real_filename;
 
@@ -1485,7 +1476,7 @@ bf_file_grep(Var arglist, Byte next, void *vdata, Objid progr)
     {
         tmp_name.type = TYPE_STR;
         tmp_num.type = TYPE_INT;
-        arg_length = memo_strlen(arglist[2].v.str);
+        arg_length = memo_strlen(arglist[2].str());
         ret = new_list(0);
 
         if (arglist.length() >= 3 && is_true(arglist[3]))
@@ -1496,7 +1487,7 @@ bf_file_grep(Var arglist, Byte next, void *vdata, Objid progr)
         while ((line = file_get_line(fhandle, &len)) != nullptr)
         {
             line_num++;
-            if (len > 0 && strindex(line, len, arglist[2].v.str, arg_length, 0))
+            if (len > 0 && strindex(line, len, arglist[2].str(), arg_length, 0))
             {
                 tmp = new_list(0);
                 // Have to get rid of the newline, woops
@@ -1505,7 +1496,7 @@ bf_file_grep(Var arglist, Byte next, void *vdata, Objid progr)
                 /* For good reason, you can't modify a const char. But shh, we're doing it anyway. */
                 char *dirty_hack = (char*)line;
                 dirty_hack[strlen(dirty_hack) - 1] = '\0';
-                tmp_name.v.str = str_dup(dirty_hack);
+                tmp_name.str(str_dup(dirty_hack));
                 tmp = listappend(tmp, tmp_name);
                 tmp_num.v.num = line_num;
                 tmp = listappend(tmp, tmp_num);
@@ -1558,6 +1549,8 @@ bf_file_count_lines(Var arglist, Byte next, void *vdata, Objid progr)
 
     return r;
 }
+
+/************************************************************************/
 
 void
 register_fileio(void)

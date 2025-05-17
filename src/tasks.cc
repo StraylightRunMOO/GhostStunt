@@ -309,7 +309,7 @@ icmd_list(int icmd_flags)
     s.type = TYPE_STR;
 #define _ICMD_MKSTR(ICMD_PREFIX,PREFIX,_)   \
     if (icmd_flags & (1<<ICMD_PREFIX)) {    \
-        s.v.str = str_dup(#PREFIX);     \
+        s.str(str_dup(#PREFIX));     \
         list = listappend(list, s);     \
     }                   \
 
@@ -334,7 +334,7 @@ icmd_set_flags(tqueue * tq, Var list)
             int icmd;
             if (list[i].type != TYPE_STR)
                 return 0;
-            icmd = icmd_index(list[i].v.str);
+            icmd = icmd_index(list[i].str());
             if (!icmd)
                 return 0;
             newflags |= (1 << icmd);
@@ -705,7 +705,7 @@ end_programming(tqueue * tq)
         Var desc;
 
         desc.type = TYPE_STR;
-        desc.v.str = tq->program_verb;
+        desc.str(tq->program_verb);
         h = find_described_verb(Var::new_obj(tq->program_object), desc);
 
         if (!h.ptr)
@@ -782,7 +782,7 @@ do_intrinsic_command(tqueue * tq, Parsed_Command * pc)
             if (pc->args.length() != 1)
                 notify(tq->player, "Usage:  .program object:verb");
             else
-                start_programming(tq, (char *) pc->args[1].v.str);
+                start_programming(tq, (char *) pc->args[1].str());
             break;
         case ICMD_PREFIX:
         case ICMD_OUTPUTPREFIX:
@@ -1018,8 +1018,8 @@ free_task_queue(task_queue q)
            {                                                                \
                 if (tq->flush_cmd)                                          \
                     free_str(tq->flush_cmd);                                \
-                    if (value.type == TYPE_STR && value.v.str[0] != '\0')   \
-                        tq->flush_cmd = str_ref(value.v.str);               \
+                    if (value.type == TYPE_STR && value.str()[0] != '\0')   \
+                        tq->flush_cmd = str_ref(value.str());               \
                     else                                                    \
                         tq->flush_cmd = 0;                                  \
             })                                                              \
@@ -1352,7 +1352,7 @@ read_input_now(Objid connection)
         r.v.num = 0;
     } else {
         r.type = TYPE_STR;
-        r.v.str = t->t.input.string;
+        r.str(t->t.input.string);
         myfree(t, M_TASK);
     }
 
@@ -1463,17 +1463,17 @@ create_or_extend(Var in, const char *_new, int newlen)
     Var out;
 
     if (in.type == TYPE_STR) {
-        stream_add_string(s, in.v.str);
+        stream_add_string(s, in.str());
         stream_add_raw_bytes_to_binary(s, _new, newlen);
         free_var(in);
         out.type = TYPE_STR;
-        out.v.str = str_dup(reset_stream(s));
+        out.str(str_dup(reset_stream(s)));
     }
     else {
         stream_add_raw_bytes_to_binary(s, _new, newlen);
         free_var(in);
         out.type = TYPE_STR;
-        out.v.str = str_dup(reset_stream(s));
+        out.str(str_dup(reset_stream(s)));
     }
 
     return out;
@@ -1564,7 +1564,7 @@ on_message_complete_callback(http_parser *parser)
 
 #define INIT_KEY(var, val)      \
     var.type = TYPE_STR;        \
-    var.v.str = str_dup(val)
+    var.str(str_dup(val))
 
         INIT_KEY(URI, "uri");
         INIT_KEY(METHOD, "method");
@@ -1580,7 +1580,7 @@ on_message_complete_callback(http_parser *parser)
     if (parser->type == HTTP_REQUEST) {
         Var method;
         method.type = TYPE_STR;
-        method.v.str = str_dup(http_method_str((http_method)state->parser.method));
+        method.str(str_dup(http_method_str((http_method)state->parser.method)));
         state->result = mapinsert(state->result, var_dup(METHOD), method);
     }
     else { /* HTTP_RESPONSE */
@@ -1713,19 +1713,17 @@ run_ready_tasks(void)
                                 if (tq->parsing_state->parser.http_errno != HPE_OK) {
                                     Var key, value;
                                     key.type = TYPE_STR;
-                                    key.v.str = str_dup("error");
+                                    key.str(str_dup("error"));
                                     value = new_list(2);
-                                    value[1].type = TYPE_STR;
-                                    value[1].v.str = str_dup(http_errno_name((http_errno)tq->parsing_state->parser.http_errno));
-                                    value[2].type = TYPE_STR;
-                                    value[2].v.str = str_dup(http_errno_description((http_errno)tq->parsing_state->parser.http_errno));
+                                    value[1] = Var::new_str(str_dup(http_errno_name((http_errno)tq->parsing_state->parser.http_errno)));
+                                    value[2] = Var::new_str(str_dup(http_errno_description((http_errno)tq->parsing_state->parser.http_errno)));
                                     tq->parsing_state->result = mapinsert(tq->parsing_state->result, key, value);
                                     done = 1;
                                 }
                                 else if (tq->parsing_state->parser.upgrade) {
                                     Var key;
                                     key.type = TYPE_STR;
-                                    key.v.str = str_dup("upgrade");
+                                    key.str(str_dup("upgrade"));
                                     tq->parsing_state->result = mapinsert(tq->parsing_state->result, key, Var::new_int(1));
                                     done = 1;
                                 }
@@ -1753,7 +1751,7 @@ run_ready_tasks(void)
                             current_task_id = tq->reading_vm->task_id;
                             current_local = var_ref(tq->reading_vm->local);
                             v.type = TYPE_STR;
-                            v.v.str = t->t.input.string;
+                            v.str(t->t.input.string);
                             resume_from_previous_vm(tq->reading_vm, v);
                             current_task_id = -1;
                             free_var(current_local);
@@ -2205,7 +2203,7 @@ find_verb_for_programming(Objid player, const char *verbref,
         return h;
     }
     desc.type = TYPE_STR;
-    desc.v.str = *vname;
+    desc.str(*vname);
     h = find_described_verb(Var::new_obj(oid), desc);
     free_str(copy);
 
@@ -2861,7 +2859,7 @@ static package
 bf_force_input(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (conn, string [, at_front]) */
     Objid conn = arglist[1].v.obj;
-    const char *line = arglist[2].v.str;
+    const char *line = arglist[2].str();
     int at_front = (arglist.length() > 2
                     && is_true(arglist[3]));
     tqueue *tq;

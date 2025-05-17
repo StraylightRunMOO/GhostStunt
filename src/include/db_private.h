@@ -105,9 +105,7 @@ typedef struct Object {
 
 /*********** Verb cache support ***********/
 
-#define VERB_CACHE
-
-#ifdef VERB_CACHE
+#ifdef USE_VERB_CACHE
 
 /* Whenever anything is modified that could influence callable verb
  * lookup, this function must be called.

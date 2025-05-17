@@ -202,11 +202,13 @@ setremove(Var list, Var value)
 Var
 listset(Var list, Var value, int pos)
 {   /* consumes `list', `value' */
-    Var _new = list;
+    Var _new;
 
     if (var_refcount(list) > 1) {
         _new = var_dup(list);
         free_var(list);
+    } else {
+        _new = list;
     }
 
     #ifdef MEMO_SIZE
@@ -224,14 +226,6 @@ listset(Var list, Var value, int pos)
 
     return _new;
 }
-
-/*
-static Var
-listreserve(Var list, int size) {
-    list.v.list = (Var *) myrealloc(list.v.list, (next_power_of_two(size)) * sizeof(Var), M_LIST);
-    return list;
-}
-*/
 
 static Var
 doinsert(Var list, Var value, int pos)
@@ -443,35 +437,53 @@ sublist(Var list, int lower, int upper)
         return list;
 
     Var r;
-    int i;
 
-    if(lower < 0)
-        lower = lower + len;
+    if (server_flag_option_cached(SVO_FANCY_RANGES)) {
+        int i;
 
-    if(upper < 0)
-        upper = upper + len;
+        if(lower < 0)
+            lower = lower + len;
 
-    if (lower > upper && lower <= len && upper > 0) {
-        r = new_list(lower - upper + 1);
-        for (i = lower; i >= upper; i--)
-            r.v.list[lower - i + 1] = var_ref(list.v.list[i]);
-    } else if(upper > lower && upper <= len && lower > 0) {
-        r = new_list(upper - lower + 1);
-        for (i = lower; i <= upper; i++)
-            r.v.list[i - lower + 1] = var_ref(list.v.list[i]);
-    } else if(upper == lower && upper <= len && lower > 0) {
-        r = new_list(1);
-        r.v.list[1] = var_ref(list.v.list[lower]);
+        if(upper < 0)
+            upper = upper + len;
+
+        if (lower > upper && lower <= len && upper > 0) {
+            r = new_list(lower - upper + 1);
+            for (i = lower; i >= upper; i--)
+                r[lower - i + 1] = var_ref(list[i]);
+        } else if(upper > lower && upper <= len && lower > 0) {
+            r = new_list(upper - lower + 1);
+            for (i = lower; i <= upper; i++)
+                r[i - lower + 1] = var_ref(list[i]);
+        } else if(upper == lower && upper <= len && lower > 0) {
+            r = new_list(1);
+            r[1] = var_ref(list[lower]);
+        } else {
+            r = new_list(0);
+        }
+
+        free_var(list);
+
     } else {
-        r = new_list(0);
-    }
+        if (lower > upper) {
+            free_var(list);
+            return new_list(0);
+        } else {
+           int i;
 
-    free_var(list);
+            r = new_list(upper - lower + 1);
+            for (i = lower; i <= upper; i++)
+                r.v.list[i - lower + 1] = var_ref(list.v.list[i]);
+
+            free_var(list);
+        }
+    }
 
     #ifdef ENABLE_GC
         if(r.length() > 0)
             gc_set_color(r.v.list, GC_YELLOW);
     #endif
+
 
     return r;
 }
@@ -551,7 +563,7 @@ stream_add_tostr(Stream * s, Var v)
         {
             if(server_flag_option_cached(SVO_CORIFY_OBJ_TOSTR) > 0) {
                 Var c = corified_as(v, 0);
-                stream_printf(s, "%s", c.v.str);
+                stream_printf(s, "%s", c.str());
                 free_var(c);
             } else {
                 stream_printf(s, "#%" PRIdN, v.v.obj);
@@ -559,7 +571,7 @@ stream_add_tostr(Stream * s, Var v)
         }
         break;
         case TYPE_STR:
-            stream_add_string(s, v.v.str);
+            stream_add_string(s, v.str());
             break;
         case TYPE_ERR:
             stream_add_string(s, unparse_error(v.v.err));
@@ -606,7 +618,7 @@ value2str(Var value)
     if (value.type == TYPE_STR) {
         /* do this case separately to avoid two copies
          * and to ensure that the stream never grows */
-        return str_ref(value.v.str);
+        return str_ref(value.str());
     }
     else {
         static Stream *s = nullptr;
@@ -635,7 +647,7 @@ unparse_value(Stream * s, Var v)
         {
             if(server_flag_option_cached(SVO_CORIFY_OBJ_TOLITERAL) > 0) {
                 Var c = corified_as(v, 0);
-                stream_printf(s, "%s", c.v.str);
+                stream_printf(s, "%s", c.str());
                 free_var(c);
             } else {
                 stream_printf(s, "#%" PRIdN, v.v.obj);
@@ -650,7 +662,7 @@ unparse_value(Stream * s, Var v)
             break;
         case TYPE_STR:
         {
-            const char *str = v.v.str;
+            const char *str = v.str();
 
             stream_add_char(s, '"');
             while (*str) {
@@ -780,12 +792,12 @@ strrangeset(Var base, int from, int to, Var value)
 {
     /* base and value are free'd */
     int index, offset = 0;
-    int val_len   = memo_strlen(value.v.str);
-    int base_len  = memo_strlen(base.v.str);
+    int val_len   = memo_strlen(value.str());
+    int base_len  = memo_strlen(base.str());
     int lenleft   = (from > 1) ? from - 1 : 0;
     int lenmiddle = val_len;
     int lenright  = (base_len > to) ? base_len - to : 0;
-    int newsize   = lenleft + lenmiddle + lenright;
+    int newsize   = lenleft + lenmiddle + lenright + 1;
 
     Var ans;
     char *s;
@@ -794,15 +806,18 @@ strrangeset(Var base, int from, int to, Var value)
     s = (char *)mymalloc(sizeof(char) * (newsize + 1), M_STRING);
 
     for (index = 0; index < lenleft; index++)
-        s[offset++] = base.v.str[index];
+        s[offset++] = base.str()[index];
     for (index = 0; index < lenmiddle; index++)
-        s[offset++] = value.v.str[index];
+        s[offset++] = value.str()[index];
     for (index = 0; index < lenright; index++)
-        s[offset++] = base.v.str[index + to];
+        s[offset++] = base.str()[index + to];
+
     s[offset] = '\0';
-    ans.v.str = s;
+    ans.str(s);
+
     free_var(base);
     free_var(value);
+
     return ans;
 }
 
@@ -810,52 +825,64 @@ Var
 substr(Var str, int lower, int upper)
 {
     Var r;
-    bool reverse = false;
-
     r.type = TYPE_STR;
-    if ((lower == 0 || upper == 0) && lower > upper)
-        r.v.str = str_dup("");
-    else {
-        if(lower > upper) {
+
+    if (server_flag_option_cached(SVO_FANCY_RANGES)) {
+        bool reverse = false;
+
+        if ((lower == 0 || upper == 0) && lower > upper) {
+            str.mstr()[0] = '\0';
+            return str;
+        } else if(lower > upper) {
             std::swap(lower, upper);
             reverse = true;
         }
+        
+        lower = std::max(static_cast<int>(lower), 1);
+        upper = std::min(upper, static_cast<int>(str.length()));
 
         int loop, index = 0;
         char *s = (char *)mymalloc(upper - lower + 2, M_STRING);
 
         if(lower == upper)
-            s[index++] = str.v.str[lower-1];
+            s[index++] = str.str()[lower-1];
         else {
-            lower = std::max(lower, 1);
-            upper = std::min(upper, static_cast<int>(memo_strlen(str.v.str)));
             if(!reverse) {
                 for (loop = lower - 1; loop < upper; loop++)
-                    s[index++] = str.v.str[loop];
+                    s[index++] = str.str()[loop];
             } else {
                 for(loop = upper - 1; loop >= lower - 1; loop--)
-                    s[index++] = str.v.str[loop];
+                    s[index++] = str.str()[loop];
             }
         }
 
         s[index] = '\0';
-        r.v.str = s;
+        r.str(s);
+    } else {
+        if (lower > upper)
+            r.str(str_dup(""));
+        else {
+            int loop, index = 0;
+            char *s = (char *)mymalloc(upper - lower + 2, M_STRING);
+
+            for (loop = lower - 1; loop < upper; loop++)
+                s[index++] = str.str()[loop];
+            s[index] = '\0';
+            r.str(s);
+        }
     }
 
     free_var(str);
-    return var_ref(r);
+    return r;
 }
 
 Var
 strget(Var str, int i)
 {
-    Var r;
     char *s;
-
-    r.type = TYPE_STR;
     s = str_dup(" ");
-    s[0] = str.v.str[i - 1];
-    r.v.str = s;
+    s[0] = str.str()[i - 1];
+    Var r = Var::new_str(s);
     return r;
 }
 
@@ -887,7 +914,7 @@ bf_length(Var arglist, Byte next, void *vdata, Objid progr)
             r = Var::new_int(maplength(arglist[1]));
             break;
         case TYPE_STR:
-            r = Var::new_int(memo_strlen(arglist[1].v.str));
+            r = Var::new_int(memo_strlen(arglist[1].str()));
             break;
         default:
             free_var(arglist);
@@ -1001,35 +1028,50 @@ bf_equal(Var arglist, Byte next, void *vdata, Objid progr)
     free_var(arglist);
     return make_var_pack(r);
 }
+
 Var
-explode(Var s, char delim, bool mode) 
+explode(Var str, Var delim, bool mode)
 {
-    if(s.length() <= 1 || strchr(s.str(), delim) == NULL) {
-        Var ret = enlist_var(var_dup(s));
-        free_var(s);
-        return ret;
-    } 
+    if(str.str() == NULL || *str.str() == '\0')
+        return str;
 
-    char *found, *return_string, *freeme;
-    Var ret = new_list(0);
+    auto nlen = memo_strlen(str.str());
+    auto dlen = memo_strlen(delim.str());
 
-    freeme = return_string = strdup(s.str());
+    Var r;
+    char *s = str.mstr();
 
-    if (mode) {
-        while ((found = strsep(&return_string, &delim)) != nullptr)
-            ret = listappend(ret, str_dup_to_var(found));
+    if(dlen > 0) {
+        //char *next = s;
+        r = new_list(0);
+        size_t total = 0;
+        Var tok;
+        for(;;) {
+            char *end = strstr(s, delim.str());
+            size_t sz = end != NULL ? (((char*)end - (char*)s)) : nlen - total;
+            size_t extra = mode ? dlen : 0;
+
+            tok = Var::new_str(sz+extra+1);
+            strncpy(tok.mstr(), s, sz+extra);
+            tok.mstr()[sz+extra] = '\0';
+
+            r = listappend(r, tok);
+
+            if (end == NULL) break;
+            s = end + dlen;
+            total += sz + dlen;
+        }
     } else {
-        found = strtok(return_string, &delim);
-        while (found != nullptr) {
-            ret = listappend(ret, str_dup_to_var(found));
-            found = strtok(nullptr, &delim);
+        r = new_list(nlen);
+        for(auto i=nlen; i>0; i--) {
+            s[i] = '\0';
+            r[i] = str_dup_to_var(&s[i-1]);
         }
     }
 
-    free_var(s);
-    free(freeme);
-
-    return ret;
+    free_var(str);
+    free_var(delim);
+    return r;
 }
 
 /* Return a list of substrings of an argument separated by a delimiter. */
@@ -1037,14 +1079,53 @@ static package
 bf_explode(Var arglist, Byte next, void *vdata, Objid progr)
 {
     auto nargs = arglist.length();
-    char delim = (nargs >= 2) ? *arglist[2].str() : ' ';
+    Var delim  = (nargs >= 2) ? var_ref(arglist[2]) : str_dup_to_var(" ");
     bool mode  = (nargs >= 3 && is_true(arglist[3]));
 
-    Var ret = explode(arglist[1], delim, mode);
+    Var ret;
+
+    if(strstr(arglist[1].str(), delim.str()) != NULL)
+        ret = explode(var_ref(arglist[1]), delim, mode);
+    else
+        ret = enlist_var(var_ref(arglist[1]));
 
     free_var(arglist);
     return make_var_pack(ret);
 }
+
+static package
+bf_reverse(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var ret;
+
+    if (arglist[1].type == TYPE_LIST) {
+        int elements = arglist[1].length();
+        ret = new_list(elements);
+
+        for (size_t x = elements, y = 1; x >= 1; x--, y++) {
+            ret[y] = var_ref(arglist[1][x]);
+        }
+    } else if (arglist[1].type == TYPE_STR) {
+        size_t len = memo_strlen(arglist[1].str());
+        if (len <= 1) {
+            ret = var_ref(arglist[1]);
+        } else {
+            char *new_str = (char *)mymalloc(len + 1, M_STRING);
+            for (size_t x = 0, y = len - 1; x < len; x++, y--)
+                new_str[x] = arglist[1].str()[y];
+            new_str[len] = '\0';
+            ret.type = TYPE_STR;
+            ret.str(new_str);
+        }
+    } else {
+        ret.type = TYPE_ERR;
+        ret.v.err = E_INVARG;
+    }
+
+    free_var(arglist);
+    return ret.type == TYPE_ERR ? make_error_pack(ret.v.err) : make_var_pack(ret);
+}
+
 
 static package
 bf_slice(Var arglist, Byte next, void *vdata, Objid progr)
@@ -1106,7 +1187,7 @@ bf_slice(Var arglist, Byte next, void *vdata, Objid progr)
                     ret = listappend(ret, var_ref(default_map_value));
             }
         } else if (index.type == TYPE_INT) {
-            if (index.v.num > (element.type == TYPE_STR ? memo_strlen(element.v.str) : element.length())) {
+            if (index.v.num > (element.type == TYPE_STR ? memo_strlen(element.str()) : element.length())) {
                 free_var(arglist);
                 free_var(ret);
                 return make_error_pack(E_RANGE);
@@ -1116,7 +1197,7 @@ bf_slice(Var arglist, Byte next, void *vdata, Objid progr)
         } else if (index.type == TYPE_LIST) {
             Var tmp = new_list(0);
             for (int y = 1; y <= index.length(); y++) {
-                if (index[y].v.num > (element.type == TYPE_STR ? memo_strlen(element.v.str) : element.length())) {
+                if (index[y].v.num > (element.type == TYPE_STR ? memo_strlen(element.str()) : element.length())) {
                     free_var(arglist);
                     free_var(ret);
                     free_var(tmp);
@@ -1186,7 +1267,7 @@ sort_callback(Var arglist, Var *ret, void *extra_data)
                 case TYPE_ERR:
                     return ((int) lhs.v.err) < ((int) rhs.v.err);
                 case TYPE_STR:
-                    return (m_Natural ? strnatcasecmp(lhs.v.str, rhs.v.str) : strcasecmp(lhs.v.str, rhs.v.str)) < 0;
+                    return (m_Natural ? strnatcasecmp(lhs.str(), rhs.str()) : strcasecmp(lhs.str(), rhs.str())) < 0;
                 default:
                     errlog("Unknown type in sort compare: %d\n", rhs.type);
                     return 0;
@@ -1320,7 +1401,7 @@ bf_strsub(Var arglist, Byte next, void *vdata, Objid progr)
 
     if (arglist.length() == 4)
         case_matters = is_true(arglist[4]);
-    if (arglist[2].v.str[0] == '\0') {
+    if (arglist[2].mstr()[0] == '\0') {
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
@@ -1328,10 +1409,10 @@ bf_strsub(Var arglist, Byte next, void *vdata, Objid progr)
     TRY_STREAM;
     try {
         Var r;
-        stream_add_strsub(s, arglist[1].v.str, arglist[2].v.str,
-                          arglist[3].v.str, case_matters);
+        stream_add_strsub(s, arglist[1].str(), arglist[2].str(),
+                          arglist[3].str(), case_matters);
         r.type = TYPE_STR;
-        r.v.str = str_dup(stream_contents(s));
+        r.str(str_dup(stream_contents(s)));
         p = make_var_pack(r);
     }
     catch (stream_too_big& exception) {
@@ -1352,7 +1433,7 @@ signum(int x)
 static package
 bf_strcmp(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (string1, string2) */
-    Var r = Var::new_int(signum(strcmp(arglist[1].v.str, arglist[2].v.str)));
+    Var r = Var::new_int(signum(strcmp(arglist[1].str(), arglist[2].str())));
     free_var(arglist);
     return make_var_pack(r);
 }
@@ -1366,10 +1447,10 @@ bf_strtr(Var arglist, Byte next, void *vdata, Objid progr)
     if (arglist.length() > 3)
         case_matters = is_true(arglist[4]);
     r.type = TYPE_STR;
-    r.v.str = str_dup(strtr(arglist[1].v.str, memo_strlen(arglist[1].v.str),
-                            arglist[2].v.str, memo_strlen(arglist[2].v.str),
-                            arglist[3].v.str, memo_strlen(arglist[3].v.str),
-                            case_matters));
+    r.str(str_dup(strtr(arglist[1].str(), memo_strlen(arglist[1].str()),
+                            arglist[2].str(), memo_strlen(arglist[2].str()),
+                            arglist[3].str(), memo_strlen(arglist[3].str()),
+                            case_matters)));
     free_var(arglist);
     return make_var_pack(r);
 }
@@ -1390,8 +1471,8 @@ bf_index(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_INVARG);
     }
 
-    r = Var::new_int(strindex(arglist[1].v.str + offset, memo_strlen(arglist[1].v.str) - offset,
-                       arglist[2].v.str, memo_strlen(arglist[2].v.str),
+    r = Var::new_int(strindex(arglist[1].str() + offset, memo_strlen(arglist[1].str()) - offset,
+                       arglist[2].str(), memo_strlen(arglist[2].str()),
                        case_matters));
 
     free_var(arglist);
@@ -1415,8 +1496,8 @@ bf_rindex(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_INVARG);
     }
 
-    r = Var::new_int(strrindex(arglist[1].v.str, memo_strlen(arglist[1].v.str) + offset,
-                        arglist[2].v.str, memo_strlen(arglist[2].v.str),
+    r = Var::new_int(strrindex(arglist[1].str(), memo_strlen(arglist[1].str()) + offset,
+                        arglist[2].str(), memo_strlen(arglist[2].str()),
                         case_matters));
 
     free_var(arglist);
@@ -1438,7 +1519,7 @@ bf_tostr(Var arglist, Byte next, void *vdata, Objid progr)
             stream_add_tostr(s, arglist[i]);
         }
         r.type = TYPE_STR;
-        r.v.str = str_dup(stream_contents(s));
+        r.str(str_dup(stream_contents(s)));
         p = make_var_pack(r);
     }
     catch (stream_too_big& exception) {
@@ -1462,7 +1543,7 @@ bf_toliteral(Var arglist, Byte next, void *vdata, Objid progr)
 
         unparse_value(s, arglist[1]);
         r.type = TYPE_STR;
-        r.v.str = str_dup(stream_contents(s));
+        r.str(str_dup(stream_contents(s)));
         p = make_var_pack(r);
     }
     catch (stream_too_big& exception) {
@@ -1552,8 +1633,8 @@ do_match(Var arglist, int reverse)
     Var ans;
     Match_Indices regs[10];
 
-    subject = arglist[1].v.str;
-    pattern = arglist[2].v.str;
+    subject = arglist[1].str();
+    pattern = arglist[2].str();
     pat = get_pattern(pattern, (arglist.length() == 3
                                 && is_true(arglist[3])));
 
@@ -1641,7 +1722,7 @@ check_subs_list(Var subs)
             || subs[3].length() != 9
             || subs[4].type != TYPE_STR)
         return 1;
-    subj = subs[4].v.str;
+    subj = subs[4].str();
     subj_length = memo_strlen(subj);
     if (invalid_pair(subs[1].v.num, subs[2].v.num,
                      subj_length))
@@ -1671,7 +1752,7 @@ bf_substitute(Var arglist, Byte next, void *vdata, Objid progr)
     Stream *s;
     char c = '\0';
 
-    _template = arglist[1].v.str;
+    _template = arglist[1].str();
     template_length = memo_strlen(_template);
     subs = arglist[2];
 
@@ -1679,7 +1760,7 @@ bf_substitute(Var arglist, Byte next, void *vdata, Objid progr)
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
-    subject = subs[4].v.str;
+    subject = subs[4].str();
 
     s = new_stream(template_length);
     TRY_STREAM;
@@ -1707,7 +1788,7 @@ bf_substitute(Var arglist, Byte next, void *vdata, Objid progr)
             }
         }
         ans.type = TYPE_STR;
-        ans.v.str = str_dup(stream_contents(s));
+        ans.str(str_dup(stream_contents(s)));
         p = make_var_pack(ans);
 oops: ;
     }
@@ -1741,7 +1822,7 @@ static package
 bf_decode_binary(Var arglist, Byte next, void *vdata, Objid progr)
 {
     int length;
-    const char *bytes = binary_to_raw_bytes(arglist[1].v.str, &length);
+    const char *bytes = binary_to_raw_bytes(arglist[1].str(), &length);
     int nargs = arglist.length();
     int fully = (nargs >= 2 && is_true(arglist[2]));
     Var r;
@@ -1812,7 +1893,7 @@ encode_binary(Stream * s, Var v, int minimum, int maximum)
             stream_add_char(s, (char) v.v.num);
             break;
         case TYPE_STR:
-            stream_add_string(s, v.v.str);
+            stream_add_string(s, v.str());
             break;
         case TYPE_LIST:
             for (i = 1; i <= v.length(); i++)
@@ -1840,7 +1921,7 @@ bf_encode_binary(Var arglist, Byte next, void *vdata, Objid progr)
             stream_add_raw_bytes_to_binary(
                 s2, stream_contents(s), stream_length(s));
             r.type = TYPE_STR;
-            r.v.str = str_dup(stream_contents(s2));
+            r.str(str_dup(stream_contents(s2)));
             p = make_var_pack(r);
         }
         else
@@ -1868,7 +1949,7 @@ bf_chr(Var arglist, Byte next, void *vdata, Objid progr)
         int encoded = (!is_wizard(progr) ? encode_binary(s, arglist, 32, 254) : encode_binary(s, arglist, 0, 255));
         if (encoded) {
             r.type = TYPE_STR;
-            r.v.str = str_dup(stream_contents(s));
+            r.str(str_dup(stream_contents(s)));
             p = make_var_pack(r);
         }
         else
@@ -1899,7 +1980,7 @@ bf_parse_ansi(Var arglist, Byte next, void *vdata, Objid progr)
     Stream *tmp = new_stream(50);
     const char *random_codes[] = {"\e[31m", "\e[32m", "\e[33m", "\e[34m", "\e[35m", "\e[35m", "\e[36m"};
 
-    stream_add_string(tmp, arglist[1].v.str);
+    stream_add_string(tmp, arglist[1].str());
     free_var(arglist);
 
     ANSI_TAG_TO_CODE("[red]",        "\e[31m",   0);
@@ -1946,7 +2027,7 @@ bf_parse_ansi(Var arglist, Byte next, void *vdata, Objid progr)
 
     ANSI_TAG_TO_CODE("[null]", "", 0);
 
-    r.v.str = str_dup(reset_stream(tmp));
+    r.str(str_dup(reset_stream(tmp)));
 
     free_stream(tmp);
     free_stream(str);
@@ -1967,7 +2048,7 @@ bf_remove_ansi(Var arglist, Byte next, void *vdata, Objid progr)
     Stream *tmp;
 
     tmp = new_stream(50);
-    stream_add_string(tmp, arglist[1].v.str);
+    stream_add_string(tmp, arglist[1].str());
     free_var(arglist);
 
     MARK_FOR_REMOVAL("[red]");
@@ -2004,7 +2085,7 @@ bf_remove_ansi(Var arglist, Byte next, void *vdata, Objid progr)
     MARK_FOR_REMOVAL("[null]");
 
     r.type = TYPE_STR;
-    r.v.str = str_dup(reset_stream(tmp));
+    r.str(str_dup(reset_stream(tmp)));
 
     free_stream(tmp);
     return make_var_pack(r);
@@ -2036,17 +2117,20 @@ Var
 lowercase(Var s)
 {
     auto len = memo_strlen(s.str());
-    char *str = (char*)s.str();
+    char *str = (char*)str_dup(s.str());
 
     for(auto i=0; i<len; i++)
         if(str[i] >= 'A' && str[i] <= 'Z')
             str[i] += 'a'-'A';
 
+    free_str(s.str());
+    s.str(str);
+
     return s;
 }
 
 static package
-bf_lowercase(Var arglist, Byte next, void *vdata, Objid progr)
+bf_lowercase(Var arglist, Byte next, void *vdata, Objid progxr)
 {
     Var ret = lowercase(var_dup(arglist[1]));
     free_var(arglist);
@@ -2166,7 +2250,7 @@ bf_str_pad(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     Var r = Var::new_str(len + 1);
-    r.v.str = do_pad(src.str(), r.v.str_, memo_strlen(src.v.str), len, c, STR_OP_BOTH);
+    r.str(do_pad(src.str(), r.mstr(), memo_strlen(src.str()), len, c, STR_OP_BOTH));
 
     free_var(arglist);
     return make_var_pack(r);
@@ -2189,7 +2273,7 @@ bf_str_padr(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     Var r = Var::new_str(len + 1);
-    r.v.str = do_pad(src.str(), r.v.str_, memo_strlen(src.v.str), len, c, STR_OP_RIGHT);
+    r.str(do_pad(src.str(), r.mstr(), memo_strlen(src.str()), len, c, STR_OP_RIGHT));
 
     free_var(arglist);
     return make_var_pack(r);
@@ -2212,7 +2296,7 @@ bf_str_padl(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     Var r = Var::new_str(len + 1);
-    r.v.str = do_pad(src.str(), r.v.str_, memo_strlen(src.v.str), len, c, STR_OP_LEFT);
+    r.str(do_pad(src.str(), r.mstr(), memo_strlen(src.str()), len, c, STR_OP_LEFT));
 
     free_var(arglist);
     return make_var_pack(r);
@@ -2432,6 +2516,7 @@ register_list(void)
     register_function("equal",       2,  2, bf_equal, TYPE_ANY, TYPE_ANY);
     register_function("explode",     1,  3, bf_explode, TYPE_STR, TYPE_STR, TYPE_INT);
     register_function("implode",     2,  2, bf_implode, TYPE_LIST, TYPE_STR);
+    register_function("reverse",     1,  1, bf_reverse, TYPE_ANY);
     register_function("slice",       1,  3, bf_slice, TYPE_LIST, TYPE_ANY, TYPE_ANY);
     register_function("sort",        1,  4, bf_sort, TYPE_LIST, TYPE_LIST, TYPE_INT, TYPE_INT);
     register_function("all_members", 2,  2, bf_all_members, TYPE_ANY, TYPE_LIST);

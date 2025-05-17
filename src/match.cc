@@ -42,6 +42,8 @@ enum match_type {
     MATCH_PART,
 };
 
+static Var delim_space = str_dup_to_var(" ");
+
 static inline Var 
 get_aliases(Objid what, Objid player)
 {
@@ -59,7 +61,7 @@ get_aliases(Objid what, Objid player)
         aliases = new_list(0);
     }
 
-    aliases = listconcat(aliases, explode(str_dup_to_var(db_object_name(what)), ' ', false));
+    aliases = listconcat(aliases, explode(str_dup_to_var(db_object_name(what)), var_ref(delim_space), false));
 
     return aliases;
 }
@@ -123,7 +125,7 @@ static inline Var
 prepare_tokens(Var tokens)
 {
     if(tokens.type == TYPE_STR) {
-        tokens = explode(tokens, ' ', false);
+        tokens = explode(tokens, var_ref(delim_space), false);
     } else if(tokens.type != TYPE_LIST) {
         free_var(tokens);
         return new_list(0);
@@ -132,13 +134,15 @@ prepare_tokens(Var tokens)
     Var r = new_list(0);
     listforeach(tokens, [&r](Var value, int index) -> int {
         if(value.type == TYPE_STR && value.str() != nullptr && value.str()[0] != '\0') {
-            r = listconcat(r, explode(lowercase(var_dup(value)), ' ', false));
+            Var next = explode(var_ref(value), var_ref(delim_space), false);
+            r = listconcat(r, var_ref(next));
+            free_var(next);
         }
         return 0;
     });
 
     free_var(tokens);
-    
+
     if(!r.length()) 
         return r;
     else if(r.length() >= 2) {
@@ -221,7 +225,7 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
         return Var::new_obj(FAILED_MATCH);
     }
 
-    Var tokens  = explode(var_ref(subject), ' ', false);
+    Var tokens  = explode(var_ref(subject), var_ref(delim_space), false);
     Var ordinal = Var::new_int(0);
 
     if(use_ordinal && tokens.length() > 1)
@@ -235,13 +239,14 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
         return Var::new_obj(FAILED_MATCH);
     }
 
+    Var aliases      = new_list(0);
     Var full_matches = new_list(0);
     Var part_matches = new_list(0);
 
     if(targets.type == TYPE_LIST) {
-        listforeach(targets, [&tokens, &full_matches, &part_matches](Var target, int i) -> int {
-            Var aliases = prepare_tokens(var_ref(target));
-            if(!aliases.length()) return 0;
+        listforeach(targets, [&aliases, &tokens, &full_matches, &part_matches](Var target, int i) -> int {
+            aliases = prepare_tokens(var_ref(target));
+            if(!aliases.length()) return 1;
 
             switch(match_tokens(tokens, aliases)) {
             case MATCH_NONE: break;
@@ -252,9 +257,9 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
             return 0;
         });
     } else { // TYPE_MAP
-        mapforeach(targets, [&tokens, &full_matches, &part_matches](Var key, Var target, int i) -> int {
-            Var aliases = prepare_tokens(var_ref(target));
-            if(!aliases.length()) return 0;
+        mapforeach(targets, [&aliases, &tokens, &full_matches, &part_matches](Var key, Var target, int i) -> int {
+            aliases = prepare_tokens(var_ref(target));
+            if(!aliases.length()) return 1;
 
             switch(match_tokens(tokens, aliases)) {
             case MATCH_NONE: break;
@@ -266,6 +271,7 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
         });
     }
 
+    free_var(aliases);
     free_var(tokens);
 
     Var matches;
@@ -336,13 +342,20 @@ match_object(Objid player, const char *name)
 {
     if (name[0] == '\0')
         return NOTHING;
-    if (name[0] == '#' && is_programmer(player)) {
-        char *p;
-        Objid r = strtol(name + 1, &p, 10);
-        return (*p != '\0' || !valid(r)) ? FAILED_MATCH : r;
-    }
     if (!valid(player))
         return FAILED_MATCH;
+    if(is_programmer(player)) {
+        if (name[0] == '#') {
+            char *p;
+            Objid r = strtol(name + 1, &p, 10);
+            return (*p != '\0' || !valid(r)) ? FAILED_MATCH : r;
+        } else if(name[0] == '$') {
+            Var value = db_property_value_default(SYSTEM_OBJECT, name+1, Var::new_int(0));
+            if(value.type == TYPE_OBJ)
+                return value.obj();
+            free_var(value);
+        }
+    }
     if (!strcasecmp(name, "me"))
         return player;
     if (!strcasecmp(name, "here"))
@@ -354,7 +367,7 @@ match_object(Objid player, const char *name)
 static package 
 bf_parse_ordinal(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    Var ordinal, tokens = explode(var_ref(arglist[1]), ' ', false);
+    Var ordinal, tokens = explode(var_ref(arglist[1]), var_ref(delim_space), false);
 
     std::tie(ordinal, tokens[1]) = parse_ordinal(tokens[1]);
 

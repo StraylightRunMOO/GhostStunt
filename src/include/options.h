@@ -137,7 +137,7 @@
  * updated.
  */
 
-#define DEFAULT_MAX_STACK_DEPTH	 50
+#define DEFAULT_MAX_STACK_DEPTH	 64
 
 #define DEFAULT_FG_TICKS         60000
 #define DEFAULT_BG_TICKS         30000
@@ -463,6 +463,12 @@
 */
 
 #define USE_ANCESTOR_CACHE
+
+/******************************************************************************
+ * Cache verb handles for quick lookup.
+ ******************************************************************************
+*/
+#define USE_VERB_CACHE
 
 /******************************************************************************
  * Typically, in text mode, FIO will drop any character that doesn't have a

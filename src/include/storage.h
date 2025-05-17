@@ -170,4 +170,4 @@ free_str(const char *s)
 
 #endif /* MEMO_STRLEN */
 
-#endif              /* Storage_h */
+#endif /* Storage_h */

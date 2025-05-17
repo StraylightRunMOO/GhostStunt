@@ -195,7 +195,7 @@ void dbpriv_fix_props_for_bmi(DB_Version old_version, DB_Version new_version) {
             });
 
             mapforeach(propvals, [&obj, &fixed_props](Var key, Var value, int index) -> int {
-                db_prop_handle h = db_find_property(obj, key.v.str, nullptr, false);
+                db_prop_handle h = db_find_property(obj, key.str(), nullptr, false);
                 Var v = var_ref(value);
                 if(v.type == TYPE_NONE) v.type = TYPE_CLEAR;
                 db_set_property_value(h, v);
@@ -968,7 +968,7 @@ static inline Var db_all_ancestors_cached(Var obj) {
         ancestor_cache = new_map(0);
 
     Object *o = dbpriv_dereference(obj);
-    Var ancestors, parents = var_dup(o->parents);
+    Var ancestors, parents = o->parents;
 
     if(!maphaskey(ancestor_cache, parents)) {
         ancestors      = db_all_ancestors(obj);

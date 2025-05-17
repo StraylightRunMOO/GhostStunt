@@ -33,7 +33,7 @@ add_to_list(void *data, const char *prop_name)
 
     d->i++;
     d->r[d->i].type = TYPE_STR;
-    d->r[d->i].v.str = str_ref(prop_name);
+    d->r[d->i].str(str_ref(prop_name));
 
     return 0;
 }
@@ -65,7 +65,7 @@ static package
 bf_prop_info(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name) */
     Var obj = arglist[1];
-    const char *pname = arglist[2].v.str;
+    const char *pname = arglist[2].str();
     db_prop_handle h;
     Var r;
     unsigned flags;
@@ -100,7 +100,7 @@ bf_prop_info(Var arglist, Byte next, void *vdata, Objid progr)
     if (flags & PF_CHOWN)
         *s++ = 'c';
     *s = '\0';
-    r[2].v.str = str_dup(perms);
+    r[2].str(str_dup(perms));
 
     return make_var_pack(r);
 }
@@ -121,7 +121,7 @@ validate_prop_info(Var v, Objid * owner, unsigned *flags, const char **name)
     if (!valid(*owner))
         return E_INVARG;
 
-    for (*flags = 0, s = v[2].v.str; *s; s++) {
+    for (*flags = 0, s = v[2].str(); *s; s++) {
         switch (*s) {
             case 'r':
             case 'R':
@@ -143,7 +143,7 @@ validate_prop_info(Var v, Objid * owner, unsigned *flags, const char **name)
     if (len == 2)
         *name = nullptr;
     else
-        *name = v[3].v.str;
+        *name = v[3].str();
 
     return E_NONE;
 }
@@ -191,7 +191,7 @@ static package
 bf_set_prop_info(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name, {owner, perms [, new-name]}) */
     Var obj = arglist[1];
-    const char *pname = arglist[2].v.str;
+    const char *pname = arglist[2].str();
     Var info = arglist[3];
     enum error e = set_prop_info(obj, pname, info, progr);
 
@@ -207,7 +207,7 @@ static package
 bf_add_prop(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name, initial-value, initial-info) */
     Var obj = arglist[1];
-    const char *pname = arglist[2].v.str;
+    const char *pname = arglist[2].str();
     Var value = arglist[3];
     Var info = arglist[4];
     Objid owner;
@@ -239,7 +239,7 @@ static package
 bf_delete_prop(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name) */
     Var obj = arglist[1];
-    const char *pname = arglist[2].v.str;
+    const char *pname = arglist[2].str();
     enum error e = E_NONE;
 
     if (!obj.is_object())
@@ -263,7 +263,7 @@ static package
 bf_clear_prop(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name) */
     Var obj = arglist[1];
-    const char *pname = arglist[2].v.str;
+    const char *pname = arglist[2].str();
     db_prop_handle h;
     Var value;
     enum error e;
@@ -299,7 +299,7 @@ static package
 bf_is_clear_prop(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name) */
     Var obj = arglist[1];
-    const char *pname = arglist[2].v.str;
+    const char *pname = arglist[2].str();
     db_prop_handle h;
     Var r;
     enum error e;

@@ -284,7 +284,7 @@ add_literal(Var v, State * state)
             Var nv;
 
             nv.type = TYPE_STR;
-            nv.v.str = str_intern(v.v.str);
+            nv.str(str_intern(v.str()));
             gstate->literals[i = gstate->num_literals++] = nv;
         } else {
             gstate->literals[i = gstate->num_literals++] = var_ref(v);

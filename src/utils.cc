@@ -148,8 +148,8 @@ complex_free_var(Var v)
 {
     switch (v.type) {
         case TYPE_STR:
-            if (v.v.str)
-                free_str(v.v.str);
+            if (v.str())
+                free_str(v.str());
             break;
         case TYPE_LIST:
             if (delref(v.v.list) == 0 && destroy_list(v)) {
@@ -220,8 +220,7 @@ complex_free_var(Var v)
 {
     switch (v.type) {
         case TYPE_STR:
-            if (v.v.str)
-                free_str(v.v.str);
+            if (v.str()) free_str(v.str());
             break;
         case TYPE_LIST:
             if (delref(v.v.list) == 0 && destroy_list(v))
@@ -270,7 +269,7 @@ complex_var_ref(Var v)
 {
     switch (v.type) {
         case TYPE_STR:
-            addref(v.v.str);
+            addref(v.str());
             break;
         case TYPE_LIST:
             addref(v.v.list);
@@ -300,7 +299,7 @@ complex_var_ref(Var v)
 {
     switch (v.type) {
         case TYPE_STR:
-            addref(v.v.str);
+            addref(v.str());
             break;
         case TYPE_LIST:
             addref(v.v.list);
@@ -328,7 +327,7 @@ complex_var_dup(Var v)
 {
     switch (v.type) {
         case TYPE_STR:
-            v.v.str = str_dup(v.v.str);
+            v.str(str_dup(v.str()));
             break;
         case TYPE_LIST:
             v = list_dup(v);
@@ -358,7 +357,7 @@ var_refcount(Var v)
 {
     switch (v.type) {
         case TYPE_STR:
-            return refcount(v.v.str);
+            return refcount(v.str());
             break;
         case TYPE_LIST:
             return refcount(v.v.list);
@@ -393,7 +392,7 @@ is_true(Var v)
         case TYPE_FLOAT:
             return v.v.fnum != 0.0;
         case TYPE_STR:
-            return v.v.str && *v.v.str != '\0';
+            return v.str() && *v.str() != '\0';
         case TYPE_LIST:
             return v.length() != 0;
         case TYPE_MAP:
@@ -424,12 +423,12 @@ compare(Var lhs, Var rhs, int case_matters)
             case TYPE_ERR:
                 return lhs.v.err - rhs.v.err;
             case TYPE_STR:
-                if (lhs.v.str == rhs.v.str)
+                if (lhs.str() == rhs.str())
                     return 0;
                 else if (case_matters)
-                    return strcmp(lhs.v.str, rhs.v.str);
+                    return strcmp(lhs.str(), rhs.str());
                 else
-                    return strcasecmp(lhs.v.str, rhs.v.str);
+                    return strcasecmp(lhs.str(), rhs.str());
             case TYPE_FLOAT:
                 if (std::fabs(lhs.v.fnum - rhs.v.fnum) < EPSILON)
                     return 0;
@@ -472,16 +471,16 @@ equality(Var lhs, Var rhs, int case_matters)
             case TYPE_ERR:
                 return lhs.v.err == rhs.v.err;
             case TYPE_STR:
-                if (lhs.v.str == rhs.v.str)
+                if (lhs.str() == rhs.str())
                     return 1;
 #ifdef MEMO_SIZE
-                else if (memo_strlen(lhs.v.str) != memo_strlen(rhs.v.str))
+                else if (memo_strlen(lhs.str()) != memo_strlen(rhs.str()))
                     return 0;
 #endif /* memo_strlen */
                 else if (case_matters)
-                    return !strcmp(lhs.v.str, rhs.v.str);
+                    return !strcmp(lhs.str(), rhs.str());
                 else
-                    return !strcasecmp(lhs.v.str, rhs.v.str);
+                    return !strcasecmp(lhs.str(), rhs.str());
             case TYPE_FLOAT:
                 return std::fabs(lhs.v.fnum - rhs.v.fnum) < EPSILON;
             case TYPE_LIST:
@@ -495,9 +494,10 @@ equality(Var lhs, Var rhs, int case_matters)
             case TYPE_BOOL:
                 return lhs.v.truth == rhs.v.truth;
             case TYPE_CALL:
-                if(lhs.v.call->ptr == rhs.v.call->ptr)
-                    return 1;
-                else if(db_verb_definer(*lhs.v.call) == db_verb_definer(*rhs.v.call) && memo_strlen(lhs.v.call->verbname.str()) == memo_strlen(rhs.v.call->verbname.str()) && !strcasecmp(lhs.v.str, rhs.v.str))
+                //if(lhs.v.call->ptr == rhs.v.call->ptr)
+                //    return 1;
+                //if(db_verb_definer(*lhs.v.call) == db_verb_definer(*rhs.v.call) && memo_strlen(lhs.v.call->verbname.str()) == memo_strlen(rhs.v.call->verbname.str()) && !strcasecmp(lhs.v.str, rhs.v.str))
+                if(lhs.v.call->oid == rhs.v.call->oid && !strcasecmp(lhs.v.call->verbname.str(), rhs.v.call->verbname.str()))
                     return 1;
                 return 0;
             case TYPE_COMPLEX:
@@ -636,7 +636,7 @@ value_bytes(Var v)
 
     switch (v.type) {
         case TYPE_STR:
-            size += memo_strlen(v.v.str) + 1;
+            size += memo_strlen(v.str()) + 1;
             break;
         case TYPE_FLOAT:
             size += sizeof(double);

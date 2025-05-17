@@ -16,8 +16,8 @@ static void argon2_thread_callback(Var arglist, Var *r, void *extra_data)
     const int nargs = arglist.length();
 
     // password, salt, iterations, memory, parallelism
-    const char *str = arglist[1].v.str;
-    const char *salt = arglist[2].v.str;
+    const char *str = arglist[1].str();
+    const char *salt = arglist[2].str();
     const uint32_t outlen = 32;                                              // Hash output length.
     const argon2_type type = Argon2_id;
     const uint32_t t_cost = nargs >= 3 ? arglist[3].v.num : 3;        // Iterations
@@ -48,7 +48,7 @@ static void argon2_thread_callback(Var arglist, Var *r, void *extra_data)
     }
 
     r->type = TYPE_STR;
-    r->v.str = encoded;
+    r->str(encoded);
     free(out);
 }
 
@@ -73,8 +73,8 @@ bf_argon2(Var arglist, Byte next, void *vdata, Objid progr)
 
 static void argon2_verify_thread_callback(Var arglist, Var *r, void *extra_data)
 {
-    const char *encoded = arglist[1].v.str;
-    const char *str = arglist[2].v.str;
+    const char *encoded = arglist[1].str();
+    const char *str = arglist[2].str();
     const size_t len = strlen(str);
 
     int result = argon2_verify(encoded, str, len, Argon2_id);

@@ -669,6 +669,8 @@ extern void db_delete_verb(db_verb_handle);
 				 * this call returns.
 				 */
 
+extern void db_clear_verb_cache();
+
 extern Var make_call(Objid, const char*);
 extern bool destroy_call(Var);
 

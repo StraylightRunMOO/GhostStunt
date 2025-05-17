@@ -90,7 +90,7 @@ validate_verb_info(Var v, Objid * owner, unsigned *flags, const char **names)
     if (!valid(*owner))
         return E_INVARG;
 
-    for (*flags = 0, s = v[2].v.str; *s; s++) {
+    for (*flags = 0, s = v[2].str(); *s; s++) {
         switch (*s) {
             case 'r':
             case 'R':
@@ -113,7 +113,7 @@ validate_verb_info(Var v, Objid * owner, unsigned *flags, const char **names)
         }
     }
 
-    *names = v[3].v.str;
+    *names = v[3].str();
     while (**names == ' ')
         (*names)++;
     if (**names == '\0')
@@ -164,9 +164,9 @@ validate_verb_args(Var v, db_arg_spec * dobj, db_prep_spec * prep,
             && v[3].type == TYPE_STR))
         return E_TYPE;
 
-    if (!match_arg_spec(v[1].v.str, dobj)
-            || !match_prep_spec(v[2].v.str, prep)
-            || !match_arg_spec(v[3].v.str, iobj))
+    if (!match_arg_spec(v[1].str(), dobj)
+            || !match_prep_spec(v[2].str(), prep)
+            || !match_arg_spec(v[3].str(), iobj))
         return E_INVARG;
 
     return E_NONE;
@@ -233,7 +233,7 @@ find_described_verb(Var obj, Var desc)
         return db_find_indexed_verb(obj, desc.v.num);
     else {
         int flag = server_flag_option("support_numeric_verbname_strings", 0);
-        return db_find_defined_verb(obj, desc.v.str, flag);
+        return db_find_defined_verb(obj, desc.str(), flag);
     }
 }
 
@@ -465,7 +465,7 @@ lister(void *data, const char *line)
     Var v;
 
     v.type = TYPE_STR;
-    v.v.str = str_dup(line);
+    v.str(str_dup(line));
     *r = listappend(*r, v);
 }
 
@@ -558,7 +558,7 @@ static package
 bf_respond_to(Var arglist, Byte next, void *data, Objid progr)
 {
     Var object = arglist[1];
-    const char *verb = arglist[2].v.str;
+    const char *verb = arglist[2].str();
 
     if (!object.is_object()) {
         free_var(arglist);
@@ -679,6 +679,22 @@ bf_verb_meta(Var arglist, Byte next, void *data, Objid progr)
     return make_var_pack(r);
 }
 
+#ifdef USE_VERB_CACHE
+
+static package
+bf_clear_verb_cache(Var arglist, Byte next, void *data, Objid progr)
+{
+    // wiz only
+    if(!is_wizard(progr)) {
+        free_var(arglist);
+        return make_error_pack(E_PERM);
+    }
+
+    db_clear_verb_cache();
+    free_var(arglist);
+    return make_var_pack(Var::new_int(0));
+}
+
 static package
 bf_verb_cache(Var arglist, Byte next, void *data, Objid progr)
 {
@@ -693,20 +709,25 @@ bf_verb_cache(Var arglist, Byte next, void *data, Objid progr)
     return make_var_pack(r);
 }
 
+#endif
+
 void
 register_verbs(void)
 {
-    register_function("verbs",         1,  1, bf_verbs, TYPE_ANY);
-    register_function("verb_info",     2,  3, bf_verb_info, TYPE_ANY, TYPE_ANY);
-    register_function("set_verb_info", 3,  3, bf_set_verb_info, TYPE_ANY, TYPE_ANY, TYPE_LIST);
-    register_function("verb_meta",     2,  3, bf_verb_meta, TYPE_OBJ, TYPE_STR, TYPE_ANY);
-    register_function("verb_args",     2,  2, bf_verb_args, TYPE_ANY, TYPE_ANY);
-    register_function("set_verb_args", 3,  3, bf_set_verb_args, TYPE_ANY, TYPE_ANY, TYPE_LIST);
-    register_function("add_verb",      3,  3, bf_add_verb, TYPE_ANY, TYPE_LIST, TYPE_LIST);
-    register_function("delete_verb",   2,  2, bf_delete_verb, TYPE_ANY, TYPE_ANY);
-    register_function("verb_code",     2,  4, bf_verb_code, TYPE_ANY, TYPE_ANY, TYPE_ANY, TYPE_ANY);
-    register_function("set_verb_code", 3,  3, bf_set_verb_code, TYPE_ANY, TYPE_ANY, TYPE_LIST);
-    register_function("respond_to",    2,  2, bf_respond_to, TYPE_ANY, TYPE_STR);
-    register_function("eval",          1, -1, bf_eval, TYPE_STR);
-    register_function("verb_cache",    0,  0, bf_verb_cache);
+    register_function("verbs",            1,  1, bf_verbs, TYPE_ANY);
+    register_function("verb_info",        2,  3, bf_verb_info, TYPE_ANY, TYPE_ANY);
+    register_function("set_verb_info",    3,  3, bf_set_verb_info, TYPE_ANY, TYPE_ANY, TYPE_LIST);
+    register_function("verb_meta",        2,  3, bf_verb_meta, TYPE_OBJ, TYPE_STR, TYPE_ANY);
+    register_function("verb_args",        2,  2, bf_verb_args, TYPE_ANY, TYPE_ANY);
+    register_function("set_verb_args",    3,  3, bf_set_verb_args, TYPE_ANY, TYPE_ANY, TYPE_LIST);
+    register_function("add_verb",         3,  3, bf_add_verb, TYPE_ANY, TYPE_LIST, TYPE_LIST);
+    register_function("delete_verb",      2,  2, bf_delete_verb, TYPE_ANY, TYPE_ANY);
+    register_function("verb_code",        2,  4, bf_verb_code, TYPE_ANY, TYPE_ANY, TYPE_ANY, TYPE_ANY);
+    register_function("set_verb_code",    3,  3, bf_set_verb_code, TYPE_ANY, TYPE_ANY, TYPE_LIST);
+    register_function("respond_to",       2,  2, bf_respond_to, TYPE_ANY, TYPE_STR);
+    register_function("eval",             1, -1, bf_eval, TYPE_STR);
+    #ifdef USE_VERB_CACHE
+    register_function("verb_cache",       0,  0, bf_verb_cache);
+    register_function("clear_verb_cache", 0,  0, bf_clear_verb_cache);
+    #endif
 }

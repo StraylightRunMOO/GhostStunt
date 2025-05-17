@@ -138,6 +138,7 @@ bf_read_stdin(Var arglist, Byte next, void *vdata, Objid progr)
 }
 #endif              /* EXAMPLE */
 
+#ifdef USE_VERB_CACHE
 #define STUPID_VERB_CACHE 1
 #ifdef STUPID_VERB_CACHE
 #include "utils.h"
@@ -170,7 +171,7 @@ bf_log_cache_stats(Var arglist, Byte next, void *vdata, Objid progr)
     return no_var_pack();
 }
 #endif
-
+#endif
 
 void
 register_extensions()
@@ -179,8 +180,10 @@ register_extensions()
     register_task_queue(stdin_enumerator);
     register_function("read_stdin", 0, 0, bf_read_stdin);
 #endif
+#ifdef USE_VERB_CACHE
 #ifdef STUPID_VERB_CACHE
     register_function("log_cache_stats", 0, 0, bf_log_cache_stats);
     register_function("verb_cache_stats", 0, 0, bf_verb_cache_stats);
+#endif
 #endif
 }

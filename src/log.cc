@@ -212,7 +212,7 @@ bf_server_log(Var arglist, Byte next, void *vdata, Objid progr)
         free_var(arglist);
         return make_error_pack(E_PERM);
     } else {
-        const char *message = arglist[1].v.str;
+        const char *message = arglist[1].str();
         int level = LOG_NONE;
 
         if (arglist.length() == 2) {

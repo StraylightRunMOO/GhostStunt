@@ -86,7 +86,7 @@ static void init_version_structure()
 
 #define SET_INT(W,value)  (W).type = TYPE_INT;  (W).v.num = (value)
 #define SET_FLOAT(W,value) (W).type = TYPE_FLOAT; (W).v.fnum = (value)
-#define SET_STR(W,value)  (W).type = TYPE_STR;  (W).v.str = str_dup(value)
+#define SET_STR(W,value)  (W).type = TYPE_STR;  (W).str(str_dup(value))
 #define SET_OBJ(W,value)  (W).type = TYPE_OBJ;  (W).v.obj = (value)
 #define SET_VAR(W,value)  (W) = var_ref(value)
 
@@ -185,12 +185,12 @@ server_version_full(Var arg)
     if (!version_structure) {
         init_version_structure();
     }
-    if (arg.type != TYPE_STR || arg.v.str[0] == '\0' ) {
+    if (arg.type != TYPE_STR || arg.str()[0] == '\0' ) {
         r.type   = TYPE_LIST;
         r.v.list = version_structure;
         return var_ref(r);
     }
-    s = arg.v.str;
+    s = arg.str();
     tree = version_structure;
     for (;;) {
         /* invariants:
@@ -206,15 +206,15 @@ server_version_full(Var arg)
                 default:
                     break;
                 case TYPE_STR:
-                    if (memo_strlen(tree[0].v.str) == e - s &&
-                            strncmp(tree[0].v.str, s, e - s) == 0)
+                    if (memo_strlen(tree[0].str()) == e - s &&
+                            strncmp(tree[0].str(), s, e - s) == 0)
                         goto found;
                     break;
                 case TYPE_LIST:
                     if (tree[0].length() == 2 &&
                             tree[0][1].type == TYPE_STR &&
-                            memo_strlen(tree[0][1].v.str) == e - s &&
-                            strncmp(tree[0][1].v.str, s, e - s) == 0) {
+                            memo_strlen(tree[0][1].str()) == e - s &&
+                            strncmp(tree[0][1].str(), s, e - s) == 0) {
 
                         if (tree[0].length() > 1)
                             tree = tree[0].v.list + 2;

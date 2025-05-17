@@ -265,7 +265,7 @@ parse_type_multi(var_type var)
     if(len == 1) {
         buffer << t[1].str();
     } else if(len == 2) {
-        buffer << t[1].v.str << " or " << t[2].v.str;
+        buffer << t[1].str() << " or " << t[2].str();
     } else {
         listforeach(t, [&len, &buffer](Var value, int index) -> int {
             buffer << value.str() << ", ";
@@ -321,7 +321,7 @@ parse_type_literal(var_type var)
     if(len == 1) {
         buffer << t[1].str();
     } else if(len == 2) {
-        buffer << t[1].v.str << "|." << t[2].v.str;
+        buffer << t[1].str() << "|." << t[2].str();
     } else {
         listforeach(t, [&len, &buffer](Var value, int index) -> int {
             buffer << value.str() << "|.";
@@ -724,8 +724,8 @@ unparse_name_expr(Stream * str, Expr * expr)
      */
 
     if (expr->kind == EXPR_VAR && expr->e.var.type == TYPE_STR
-            && ok_identifier(expr->e.var.v.str)) {
-        stream_add_string(str, expr->e.var.v.str);
+            && ok_identifier(expr->e.var.str())) {
+        stream_add_string(str, expr->e.var.str());
         return;
     }
     /* We need to use the full unparser */
@@ -744,9 +744,9 @@ unparse_expr(Stream * str, Expr * expr)
                     && expr->e.bin.lhs->e.var.v.obj == 0
                     && expr->e.bin.rhs->kind == EXPR_VAR
                     && expr->e.bin.rhs->e.var.type == TYPE_STR
-                    && ok_identifier(expr->e.bin.rhs->e.var.v.str)) {
+                    && ok_identifier(expr->e.bin.rhs->e.var.str())) {
                 stream_add_char(str, '$');
-                stream_add_string(str, expr->e.bin.rhs->e.var.v.str);
+                stream_add_string(str, expr->e.bin.rhs->e.var.str());
             } else {
                 bracket_lt(str, EXPR_PROP, expr->e.bin.lhs);
                 if (expr->e.bin.lhs->kind == EXPR_VAR
@@ -764,9 +764,9 @@ unparse_expr(Stream * str, Expr * expr)
                     && expr->e.verb.obj->e.var.v.obj == 0
                     && expr->e.verb.verb->kind == EXPR_VAR
                     && expr->e.verb.verb->e.var.type == TYPE_STR
-                    && ok_identifier(expr->e.verb.verb->e.var.v.str)) {
+                    && ok_identifier(expr->e.verb.verb->e.var.str())) {
                 stream_add_char(str, '$');
-                stream_add_string(str, expr->e.verb.verb->e.var.v.str);
+                stream_add_string(str, expr->e.verb.verb->e.var.str());
             } else {
                 bracket_lt(str, EXPR_VERB, expr->e.verb.obj);
                 stream_add_char(str, ':');
@@ -782,9 +782,9 @@ unparse_expr(Stream * str, Expr * expr)
                     && expr->e.verb.obj->e.var.v.obj == 0
                     && expr->e.verb.verb->kind == EXPR_VAR
                     && expr->e.verb.verb->e.var.type == TYPE_STR
-                    && ok_identifier(expr->e.verb.verb->e.var.v.str)) {
+                    && ok_identifier(expr->e.verb.verb->e.var.str())) {
                 stream_add_char(str, '$');
-                stream_add_string(str, expr->e.verb.verb->e.var.v.str);
+                stream_add_string(str, expr->e.verb.verb->e.var.str());
             } else {
                 bracket_lt(str, EXPR_VERB, expr->e.verb.obj);
                 stream_add_char(str, ':');

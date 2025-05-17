@@ -55,7 +55,7 @@ map_compare(const void *a, const void *b, void *udata)
         case TYPE_ERR:
             return lhs.v.err != rhs.v.err;
         case TYPE_STR:
-            return strcmp(lhs.v.str, rhs.v.str);
+            return strcmp(lhs.str(), rhs.str());
         case TYPE_FLOAT:
             return std::fabs(lhs.v.fnum - rhs.v.fnum) < EPSILON;
         case TYPE_BOOL:
@@ -80,7 +80,7 @@ map_hash(const void *item, uint64_t seed0, uint64_t seed1)
 
     switch (entry->key.type) {
     case TYPE_STR:
-        return HASH_FN(entry->key.v.str, memo_strlen(entry->key.v.str), SEED0, SEED1);
+        return HASH_FN(entry->key.str(), memo_strlen(entry->key.str()), SEED0, SEED1);
     case TYPE_INT:
         return HASH_FN(&(entry->key.v.num), sizeof(Num), SEED0, SEED1);
     case TYPE_FLOAT:
@@ -112,7 +112,7 @@ map_element_free(void *item)
     #ifdef MAP_DEBUG
         Var k = str_dup_to_var(toliteral(entry->key).c_str());
         Var v = str_dup_to_var(toliteral(entry->value).c_str());
-        oklog("[%d:%d] map[%s] = %s\n", var_refcount(entry->key), var_refcount(entry->value), k.v.str, v.v.str);
+        oklog("[%d:%d] map[%s] = %s\n", var_refcount(entry->key), var_refcount(entry->value), k.str(), v.str());
 
         free_var(k);
         free_var(v);
@@ -132,6 +132,11 @@ empty_map()
             sizeof(map_entry), 0, 0, 0, map_hash, map_compare, map_element_free, NULL);
         emptymap.type = TYPE_MAP;
     }
+
+    if(emptymap.length() > 0) {
+        map_clear(emptymap);
+    }
+
     return var_ref(emptymap);
 }
 
@@ -158,6 +163,18 @@ new_map(size_t size, int preserve_order)
         assert(gc_get_color(map.v.map) == GC_GREEN);
     #endif
 
+    return map;
+}
+
+Var 
+map_clear(Var map) {
+    hashmap_clear(map.v.map, true);
+    Var keys;
+    keys.type = TYPE_LIST;
+    keys.v.list = (Var*)hashmap_get_udata(map.v.map);
+    free_var(keys);
+    keys = new_list(0);
+    hashmap_set_udata(map.v.map, keys.v.list);
     return map;
 }
 
@@ -228,7 +245,7 @@ mapkeyadd(Var map, Var key)
         return;
 
     Var key_list = mapkeys(map);
-    key_list = listappend(key_list, var_dup(key));
+    key_list = listappend(key_list, var_ref(key));
     hashmap_set_udata(map.v.map, key_list.v.list);
 }
 
@@ -273,7 +290,7 @@ mapinsert(Var map, Var key, Var value)
      * boundary conditions in the looping logic), and keys that are
      * collections (for which `compare' does not currently work).
      */
-    if (key.type == TYPE_NONE || key.type == TYPE_CLEAR || key.type == TYPE_MAP)
+    if (key.type == TYPE_NONE || key.type == TYPE_MAP)
         panic_moo("MAPINSERT: invalid key");
 
     size_t size_change = (value_bytes(key) + value_bytes(value));
@@ -287,6 +304,9 @@ mapinsert(Var map, Var key, Var value)
         free_var(map);
         map = _new;
     }
+
+    if(key.type == TYPE_CLEAR)
+        hashmap_set_dirty(map.v.map, true);
 
     map_entry *_old_entry;
     map_entry _new_entry{.key = key, .value = value};
@@ -549,9 +569,8 @@ mapat(Var map, Var key)
         Var r;
         r.type = TYPE_CLEAR;
         find.value = r;
-        hashmap_set(map.v.map, &find);
-        mapkeyadd(map, key);
-        hashmap_set_dirty(map.v.map, true);
+
+        map = mapinsert(map, key, r);
 
         #ifdef MEMO_SIZE
             var_metadata *metadata = ((var_metadata*)map.v.map) - 1;

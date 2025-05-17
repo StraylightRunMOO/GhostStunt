@@ -206,7 +206,7 @@ output_to_list(const char *line)
     Var str;
 
     str.type = TYPE_STR;
-    str.v.str = str_dup(line);
+    str.str(str_dup(line));
     backtrace_list = listappend(backtrace_list, str);
 }
 
@@ -610,7 +610,7 @@ abort_task(enum abort_reason reason)
 save_hinfo:
             value = new_list(3);
             value[1].type = TYPE_STR;
-            value[1].v.str = str_dup(htag);
+            value[1].str(str_dup(htag));
             value[2] = make_stack_list(activ_stack, 0, top_activ_stack, 1,
                                               root_activ_vector, 1, server_flag_option_cached(SVO_INCLUDE_RT_VARS),
                                               NOTHING);
@@ -706,7 +706,7 @@ call_verb2(Objid recv, const char *vname, Var _this, Var args, int do_pass, bool
             return E_INVIND;
 
         Var ancestors = db_ancestors(RUN_ACTIV.vloc, false);
-        
+
         listforeach(ancestors, [&h, &vname](Var value, int index) -> int {
             h = db_find_callable_verb(value, vname);
             return (h.ptr) ? 1 : 0;
@@ -777,9 +777,9 @@ call_verb2(Objid recv, const char *vname, Var _this, Var args, int do_pass, bool
 
     v.type = TYPE_STR;
     if (vname[0] == WAIF_VERB_PREFIX)
-        v.v.str = str_dup(vname + 1);
+        v.str(str_dup(vname + 1));
     else
-        v.v.str = str_ref(vname);
+        v.str(str_ref(vname));
     set_rt_env_var(env, SLOT_VERB, v);  /* no var_dup */
     set_rt_env_var(env, SLOT_ARGS, args);   /* no var_dup */
 
@@ -926,7 +926,7 @@ run(char raise, enum error resumption_error, Var * result)
             error_stream = new_stream(20);                                                       \
         }                                                                                        \
         if (the_object.v.obj == NOTHING) {                                                       \
-            stream_printf(error_stream, "%s: %s", unparse_error(the_err), the_missing.v.str);    \
+            stream_printf(error_stream, "%s: %s", unparse_error(the_err), the_missing.str());    \
         } else {                                                                                 \
             char separator;                                                                      \
             if (the_err == E_PROPNF)                                                             \
@@ -937,7 +937,7 @@ run(char raise, enum error resumption_error, Var * result)
                 separator = ' ';                                                                 \
             stream_printf(error_stream, "%s: ", unparse_error(the_err));                         \
             unparse_value(error_stream, the_object);                                             \
-            stream_printf(error_stream, "%c%s%s", separator, the_missing.v.str,                  \
+            stream_printf(error_stream, "%c%s%s", separator, the_missing.str(),                  \
                           the_err == E_VERBNF ? "()" : "");                                      \
         }                                                                                        \
         char *error_message = str_dup(reset_stream(error_stream));                               \
@@ -1228,36 +1228,36 @@ do_test:
                     } else if ((list.type == TYPE_LIST
                                 && (index.v.num < 1 || index.v.num > list.length() /* size */))
                                || (list.type == TYPE_STR
-                                   && (index.v.num < 1 || index.v.num > (int) memo_strlen(list.v.str)))) {
+                                   && (index.v.num < 1 || index.v.num > (int) memo_strlen(list.str())))) {
                         free_var(value);
                         free_var(index);
                         free_var(list);
                         PUSH_ERROR(E_RANGE);
                     } else if (list.type == TYPE_STR
-                               && memo_strlen(value.v.str) != 1) {
+                               && memo_strlen(value.str()) != 1) {
                         free_var(value);
                         free_var(index);
                         free_var(list);
                         PUSH_ERROR(E_INVARG);
                     } else if (list.type == TYPE_LIST) {
                         if((value_bytes(list) + value_bytes(value) - value_bytes(list[index])) <= server_int_option_cached(SVO_MAX_LIST_VALUE_BYTES)) {
-                            Var r = listset(list, value, index.v.num);
-                            PUSH(r);
+                            list = listset(list, value, index.v.num);
+                            PUSH(list);
                         } else {
                             PUSH_ERROR(E_QUOTA);
                         }
                     } else if (list.type == TYPE_MAP) {
                         if((value_bytes(list) + value_bytes(index) + value_bytes(value)) <= server_int_option_cached(SVO_MAX_MAP_VALUE_BYTES)) {
-                            Var r = mapinsert(list, index, value);
-                            PUSH(r);
+                            list = mapinsert(list, index, value);
+                            PUSH(list);
                         } else {
                             PUSH_ERROR(E_QUOTA);
                         }
                     } else {    /* TYPE_STR */
-                        char *tmp_str = str_dup(list.v.str);
-                        free_str(list.v.str);
-                        tmp_str[index.v.num - 1] = value.v.str[0];
-                        list.v.str = tmp_str;
+                        char *tmp_str = str_dup(list.str());
+                        free_str(list.str());
+                        tmp_str[index.v.num - 1] = value.str()[0];
+                        list.str(tmp_str);
                         free_var(value);
                         PUSH(list);
                     }
@@ -1344,7 +1344,7 @@ do_test:
                             comparison = ((int) lhs.v.err) - ((int) rhs.v.err);
                             break;
                         case TYPE_STR:
-                            comparison = strcasecmp(lhs.v.str, rhs.v.str);
+                            comparison = strcasecmp(lhs.str(), rhs.str());
                             break;
                         default:
                             errlog("RUN: Impossible type in comparison: %d\n",
@@ -1386,7 +1386,7 @@ finish_comparison:
                 lhs = POP();    /* lhs, any type */
                 if (lhs.type == TYPE_STR && rhs.type == TYPE_STR) {
                     ans.type = TYPE_INT;
-                    ans.v.num = strindex(rhs.v.str, memo_strlen(rhs.v.str), lhs.v.str, memo_strlen(lhs.v.str), 0);
+                    ans.v.num = strindex(rhs.str(), memo_strlen(rhs.str()), lhs.str(), memo_strlen(lhs.str()), 0);
                     PUSH(ans);
                     free_var(lhs);
                     free_var(rhs);
@@ -1477,18 +1477,18 @@ finish_comparison:
                     if(lhs.is_type() || rhs.is_type()) ans.type = _TYPE_TYPE;
                 } else if (lhs.type == TYPE_STR && rhs.type == TYPE_STR) {
                     char *str;
-                    int llen = memo_strlen(lhs.v.str);
-                    int flen = llen + memo_strlen(rhs.v.str);
+                    int llen = memo_strlen(lhs.str());
+                    int flen = llen + memo_strlen(rhs.str());
 
                     if (server_int_option_cached(SVO_MAX_STRING_CONCAT) < flen) {
                         ans.type = TYPE_ERR;
                         ans.v.err = E_QUOTA;
                     } else {
                         str = (char *)mymalloc(flen + 1, M_STRING);
-                        strcpy(str, lhs.v.str);
-                        strcpy(str + llen, rhs.v.str);
+                        strcpy(str, lhs.str());
+                        strcpy(str + llen, rhs.str());
                         ans.type = TYPE_STR;
-                        ans.v.str = str;
+                        ans.str(str);
                     }
                 } else if (lhs.type == TYPE_LIST) {
                     if (rhs.type == TYPE_LIST) {
@@ -1655,7 +1655,7 @@ finish_comparison:
                             free_var(list);
                         }
                     } else {    /* list.type == TYPE_STR */
-                        int len = memo_strlen(list.v.str);
+                        int len = memo_strlen(list.str());
                         if(index.v.num < 0) index.v.num += len;
                         if (index.v.num <= 0 || index.v.num > len) {
                             free_var(index);
@@ -1770,6 +1770,11 @@ finish_comparison:
                         free_var(from);
                         free_var(base);
                         PUSH_ERROR(E_RANGE);
+                    } else if(server_flag_option_cached(SVO_FANCY_RANGES) && (from.v.num > len || from.v.num < 0 || to.v.num > len || to.v.num < 0)) {
+                        free_var(to);
+                        free_var(from);
+                        free_var(base);
+                        PUSH_ERROR(E_RANGE);
                     } else {
                         PUSH((base.type == TYPE_STR
                               ? substr(base, from.v.num, to.v.num)
@@ -1781,8 +1786,6 @@ finish_comparison:
                 }
             }
             break;
-
-
 
             case OP_G_PUT:
             {
@@ -1816,7 +1819,7 @@ finish_comparison:
                 obj = POP();        /* should be an object */
                 if (obj.type == TYPE_WAIF && propname.type == TYPE_STR) {
                     enum error err;
-                    err = waif_get_prop(obj.v.waif, propname.v.str, &prop, RUN_ACTIV.progr);
+                    err = waif_get_prop(obj.v.waif, propname.str(), &prop, RUN_ACTIV.progr);
                     free_var(obj);
                     if (err == E_PROPNF) {
                         var_ref(propname);
@@ -1853,7 +1856,7 @@ finish_comparison:
                     db_prop_handle h;
                     int built_in;
 
-                    h = db_find_property(obj, propname.v.str, &prop);
+                    h = db_find_property(obj, propname.str(), &prop);
                     built_in = db_is_property_built_in(h);
 
                     if (!h.ptr) {
@@ -1884,7 +1887,7 @@ finish_comparison:
                 if (obj.type == TYPE_WAIF && propname.type == TYPE_STR) {
                     enum error err;
 
-                    err = waif_get_prop(obj.v.waif, propname.v.str, &prop, RUN_ACTIV.progr);
+                    err = waif_get_prop(obj.v.waif, propname.str(), &prop, RUN_ACTIV.progr);
                     if (err == E_NONE)
                         PUSH(prop);
                     else if (err == E_PROPNF) {
@@ -1903,7 +1906,7 @@ finish_comparison:
                     db_prop_handle h;
                     int built_in;
 
-                    h = db_find_property(obj, propname.v.str, &prop);
+                    h = db_find_property(obj, propname.str(), &prop);
                     built_in = db_is_property_built_in(h);
                     if (!h.ptr) {
                         var_ref(propname);
@@ -1931,7 +1934,7 @@ finish_comparison:
                 if (obj.type == TYPE_WAIF && propname.type == TYPE_STR) {
                     enum error err;
 
-                    err = waif_put_prop(obj.v.waif, propname.v.str, rhs, RUN_ACTIV.progr);
+                    err = waif_put_prop(obj.v.waif, propname.str(), rhs, RUN_ACTIV.progr);
                     free_var(obj);
                     if (err == E_NONE) {
                         free_var(propname);
@@ -1963,7 +1966,7 @@ finish_comparison:
                     enum error err = E_NONE;
                     Objid progr = RUN_ACTIV.progr;
 
-                    h = db_find_property(obj, propname.v.str, nullptr);
+                    h = db_find_property(obj, propname.str(), nullptr);
                     built_in = db_is_property_built_in(h);
                     if (!h.ptr)
                         err = E_PROPNF;
@@ -2090,7 +2093,7 @@ finish_comparison:
                 if (args.type != TYPE_LIST || verb.type != TYPE_STR)
                     err = E_TYPE;
                 else if(obj.type == TYPE_CALL) {
-                    if(!strncmp(verb.v.str, "this", memo_strlen(verb.v.str))) {
+                    if(!strncmp(verb.str(), "this", memo_strlen(verb.str()))) {
                         if(args.length() != 1)
                             err = E_INVARG;
                         else if(args[1].type != TYPE_OBJ)
@@ -2106,7 +2109,7 @@ finish_comparison:
                             }
                         }
                         break;
-                    } else if(!strncmp(verb.v.str, "call", memo_strlen(verb.v.str))) {
+                    } else if(!strncmp(verb.str(), "call", memo_strlen(verb.str()))) {
                         db_verb_handle h = *(db_verb_handle*)obj.v.call;
                         Objid definer = db_verb_definer(h).v.obj;
 
@@ -2129,15 +2132,15 @@ finish_comparison:
                     }
                 }
                 else if (obj.type == TYPE_WAIF) {
-                    char *str = (char *)mymalloc(strlen(verb.v.str) + 2, M_STRING);
+                    char *str = (char *)mymalloc(strlen(verb.str()) + 2, M_STRING);
 
                     _class = obj.v.waif->_class;
                     str[0] = WAIF_VERB_PREFIX;
-                    strcpy(str + 1, verb.v.str);
-                    free_str(verb.v.str);
-                    verb.v.str = str;
+                    strcpy(str + 1, verb.str());
+                    free_str(verb.str());
+                    verb.str(str);
                     STORE_STATE_VARIABLES();
-                    err = call_verb2(_class, verb.v.str, obj, args, 0, DEFAULT_THREAD_MODE);
+                    err = call_verb2(_class, verb.str(), obj, args, 0, DEFAULT_THREAD_MODE);
                     LOAD_STATE_VARIABLES();
                 } else {
 call_proto:
@@ -2177,7 +2180,7 @@ else if (obj.type == TYPE_##t1) {           \
 
                     if (obj.is_object() || recv != NOTHING) {
                         STORE_STATE_VARIABLES();
-                        err = call_verb2(recv, verb.v.str, obj, args, 0, DEFAULT_THREAD_MODE);
+                        err = call_verb2(recv, verb.str(), obj, args, 0, DEFAULT_THREAD_MODE);
                         /* if there is no error, RUN_ACTIV is now the CALLEE's.
                            args will be consumed in the new rt_env */
                         /* if there is an error, then RUN_ACTIV is unchanged, and
@@ -2259,8 +2262,8 @@ else if (obj.type == TYPE_##t1) {           \
                                 raise_t err = std::get<raise_t>(p.u);
 
                                 PUSH(err.code);
-                                free_str(err.msg);
-                                free_var(err.value);
+                                //free_str(err.msg);
+                                //free_var(err.value);
                             }
                             break;
                         case package::BI_CALL: 
@@ -2472,7 +2475,7 @@ else if (obj.type == TYPE_##t1) {           \
                             }
                         } else {    /* TYPE_STR */
                             Var res;
-                            if (from.v.num > memo_strlen(base.v.str) + 1 || to.v.num < 0) {
+                            if (from.v.num > memo_strlen(base.str()) + 1 || to.v.num < 0) {
                                 free_var(to);
                                 free_var(from);
                                 free_var(base);
@@ -2480,7 +2483,7 @@ else if (obj.type == TYPE_##t1) {           \
                                 PUSH_ERROR(E_RANGE);
                             } else {
                                 res = strrangeset(base, from.v.num, to.v.num, value);
-                                if (memo_strlen(res.v.str) <= server_int_option_cached(SVO_MAX_STRING_CONCAT))
+                                if (memo_strlen(res.str()) <= server_int_option_cached(SVO_MAX_STRING_CONCAT))
                                     PUSH(res);
                                 else {
                                     free_var(res);
@@ -2499,7 +2502,7 @@ else if (obj.type == TYPE_##t1) {           \
                         item = RUN_ACTIV.base_rt_stack[i];
                         if (item.type == TYPE_STR) {
                             v.type = TYPE_INT;
-                            v.v.num = memo_strlen(item.v.str) > 0 ? 1 : 0;
+                            v.v.num = memo_strlen(item.str()) > 0 ? 1 : 0;
                             PUSH(v);
                         } else if (item.type == TYPE_LIST) {
                             v.type = TYPE_INT;
@@ -2520,7 +2523,7 @@ else if (obj.type == TYPE_##t1) {           \
                         item = RUN_ACTIV.base_rt_stack[i];
                         if (item.type == TYPE_STR) {
                             v.type = TYPE_INT;
-                            v.v.num = memo_strlen(item.v.str);
+                            v.v.num = memo_strlen(item.str());
                             PUSH(v);
                         } else if (item.type == TYPE_LIST) {
                             v = Var::new_int(item.length());
@@ -2746,7 +2749,7 @@ else if (obj.type == TYPE_##t1) {           \
                             JUMP(lab);
                         } else if (BASE.type == TYPE_STR || BASE.type == TYPE_LIST) {
                             int len = (BASE.type == TYPE_STR
-                                       ? memo_strlen(BASE.v.str)
+                                       ? memo_strlen(BASE.str())
                                        : BASE.length());
                             if (ITER.type == TYPE_NONE) {
                                 free_var(ITER);
@@ -2802,7 +2805,7 @@ else if (obj.type == TYPE_##t1) {           \
                             JUMP(lab);
                         } else if (BASE.type == TYPE_STR || BASE.type == TYPE_LIST) {
                             int len = (BASE.type == TYPE_STR
-                                       ? memo_strlen(BASE.v.str)
+                                       ? memo_strlen(BASE.str())
                                        : BASE.length());
                             if (ITER.type == TYPE_NONE) {
                                 free_var(ITER);
@@ -3264,7 +3267,7 @@ run_interpreter(char raise, enum error e,
         i = args.length();
         traceback = args[i]; /* traceback is always the last argument */
         for (i = 1; i <= traceback.length(); i++)
-            notify(activ_stack[0].player, traceback[i].v.str);
+            notify(activ_stack[0].player, traceback[i].str());
     }
 
     free_var(args);
@@ -3525,7 +3528,7 @@ bf_call_function(Var arglist, Byte next, void *vdata, Objid progr)
     struct cf_state *s;
 
     if (next == 1) {        /* first call */
-        const char *fname = arglist[1].v.str;
+        const char *fname = arglist[1].str();
 
         fnum = number_func_by_name(fname);
         if (fnum == FUNC_NOT_FOUND) {
@@ -3591,7 +3594,7 @@ bf_raise(Var arglist, Byte next, void *vdata, Objid progr)
     int nargs = arglist.length();
     Var code = var_ref(arglist[1]);
     const char *msg = (nargs >= 2
-                       ? str_ref(arglist[2].v.str)
+                       ? str_ref(arglist[2].str())
                        : value2str(code));
     Var value;
 
@@ -3709,9 +3712,9 @@ bf_read_http(Var arglist, Byte next, void *vdata, Objid progr)
     static Objid connection;
     int request;
 
-    if (!strcasecmp(arglist[1].v.str, "request"))
+    if (!strcasecmp(arglist[1].str(), "request"))
         request = 1;
-    else if (!strcasecmp(arglist[1].v.str, "response"))
+    else if (!strcasecmp(arglist[1].str(), "response"))
         request = 0;
     else {
         free_var(arglist);

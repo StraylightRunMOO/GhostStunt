@@ -41,6 +41,12 @@ typedef struct {		/* Server's handle on a listening point */
 
 #include "network.h"		/* Include this *after* defining the types */
 
+#ifndef USE_RPMALLOC
+  #define USE_RPMALLOC
+  #define ALLOC_PAGE_SIZE   0
+  #define ALLOC_ENABLE_HUGE 1
+#endif 
+
 #ifdef USE_RPMALLOC
 
 extern "C" {
@@ -277,6 +283,10 @@ int proxy_connected(Objid connection, char *command);
   	flag, 0,														\
   	)																\
 																	\
+  DEFINE( SVO_FANCY_RANGES, fancy_ranges,               	     	\
+  	flag, 0,														\
+  	)																\
+																	\
   DEFINE( SVO_MAX_QUEUED_OUTPUT, max_queued_output,			        \
   																	\
 	  int, MAX_QUEUED_OUTPUT,									    \
@@ -389,7 +399,7 @@ extern int read_active_connections(void);
 				   GETVALUE, SETVALUE)						\
     if (!strcasecmp(OPTION, #NAME)) {						\
 	VALUE->type  = (TYPE_FOO);								\
-	VALUE->v.VFOO_MEMBER = (GETVALUE);						\
+	VALUE->VFOO_MEMBER((GETVALUE));  						\
 	return 1;												\
     }
 
@@ -407,9 +417,9 @@ extern int read_active_connections(void);
     {														\
 	Var pair = new_list(2);									\
 	pair[1].type = TYPE_STR;							\
-	pair[1].v.str = str_dup(#NAME);					\
+	pair[1].str(str_dup(#NAME));					\
 	pair[2].type = (TYPE_FOO);						\
-	pair[2].v.VFOO_MEMBER = (GETVALUE);				\
+	pair[2].VFOO_MEMBER((GETVALUE));				\
 	LIST = listappend(LIST, pair);							\
     }														\
 

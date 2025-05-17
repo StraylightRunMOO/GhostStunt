@@ -137,8 +137,8 @@ become_integer(Var in, Num *ret, int called_from_toint)
             break;
         case TYPE_STR:
             if (!(called_from_toint
-                    ? parse_number(in.v.str, ret, 1)
-                    : parse_object(in.v.str, ret)))
+                    ? parse_number(in.str(), ret, 1)
+                    : parse_object(in.str(), ret)))
                 *ret = 0;
             break;
         case TYPE_OBJ:
@@ -177,7 +177,7 @@ become_float(Var in, double *ret)
                     *ret = (double) in.v.num;
             break;
         case TYPE_STR:
-            if (!parse_float(in.v.str, ret) || !IS_REAL(*ret))
+            if (!parse_float(in.str(), ret) || !IS_REAL(*ret))
                 return E_INVARG;
             break;
         case TYPE_OBJ:
@@ -847,7 +847,7 @@ bf_ctime(Var arglist, Byte next, void *vdata, Objid progr)
     if (buffer[8] == '0')
         buffer[8] = ' ';
     r.type = TYPE_STR;
-    r.v.str = str_dup(buffer);
+    r.str(str_dup(buffer));
 
     return make_var_pack(r);
 }
@@ -979,6 +979,11 @@ bf_reseed_random(Var arglist, Byte next, void *vdata, Objid progr)
     return no_var_pack();
 }
 
+static inline double to_double(uint64_t x) {
+    const union { uint64_t i; double d; } u = {.i = UINT64_C(0x3FF) << 52 | x >> 12 };
+    return u.d - 1.0;
+}
+
 /* Return a random floating point value between 0.0..args[1] or args[1]..args[2] */
 static package
 bf_frandom(Var arglist, Byte next, void *vdata, Objid progr)
@@ -1068,7 +1073,7 @@ bf_random_bytes(Var arglist, Byte next, void *vdata, Objid progr)
         stream_add_raw_bytes_to_binary(s, (char *)out, len);
 
         r.type = TYPE_STR;
-        r.v.str = str_dup(stream_contents(s));
+        r.str(str_dup(stream_contents(s)));
         p = make_var_pack(r);
     }
     catch (stream_too_big& exception) {
@@ -1104,7 +1109,7 @@ bf_floatstr(Var arglist, Byte next, void *vdata, Objid progr)
     sprintf(output, fmt, d);
 
     r.type = TYPE_STR;
-    r.v.str = str_dup(output);
+    r.str(str_dup(output));
 
     return make_var_pack(r);
 }

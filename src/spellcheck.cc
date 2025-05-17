@@ -39,8 +39,8 @@ bf_spellcheck(Var arglist, Byte next, void *vdata, Objid progr) {
         spell_checker = to_aspell_speller(possible_err);
     }
 
-    const char *word = arglist[1].v.str;
-    int word_size = memo_strlen(arglist[1].v.str);
+    const char *word = arglist[1].str();
+    int word_size = memo_strlen(arglist[1].str());
 
     int correct = aspell_speller_check(spell_checker, word, word_size);
     if (!correct) {
@@ -52,7 +52,7 @@ bf_spellcheck(Var arglist, Byte next, void *vdata, Objid progr) {
         const char *word_suggestion;
         while ((word_suggestion = aspell_string_enumeration_next(elements)) != nullptr)
         {
-            s.v.str = str_dup(word_suggestion);
+            s.str(str_dup(word_suggestion));
             r = listappend(r, s);
         }
         delete_aspell_string_enumeration(elements);

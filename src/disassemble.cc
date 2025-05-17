@@ -385,7 +385,7 @@ disassemble(Program * prog, Printer p, void *data)
                                 break;
                             case TYPE_STR:
                                 stream_add_string(insn, " \"");
-                                for (ptr = v.v.str; *ptr; ptr++) {
+                                for (ptr = v.str(); *ptr; ptr++) {
                                     if (*ptr == '"' || *ptr == '\\')
                                         stream_add_char(insn, '\\');
                                     stream_add_char(insn, *ptr);
@@ -495,7 +495,7 @@ bf_disassemble(Var arglist, Byte next, void *vdata, Objid progr)
     r = new_list(data.used);
     for (i = 1; i <= data.used; i++) {
         r[i].type = TYPE_STR;
-        r[i].v.str = data.lines[i - 1];
+        r[i].str(data.lines[i - 1]);
     }
     if (data.lines)
         myfree(data.lines, M_DISASSEMBLE);

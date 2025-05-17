@@ -14,6 +14,7 @@ typedef struct map_entry {
 extern Var new_map(size_t, int preserve_order = MAP_SAVE_INSERTION_ORDER_DEFAULT);
 extern bool destroy_map(Var);
 extern Var map_dup(Var);
+extern Var map_clear(Var);
 
 extern bool mapdelete(Var, Var);
 extern Var mapinsert(Var, Var, Var);

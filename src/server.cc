@@ -387,7 +387,7 @@ handle_user_defined_signal(int sig)
 
     args = new_list(1);
     args[1].type = TYPE_STR;
-    args[1].v.str = str_dup(sig == SIGUSR1 ? "SIGUSR1" : "SIGUSR2");
+    args[1].str(str_dup(sig == SIGUSR1 ? "SIGUSR1" : "SIGUSR2"));
 
     if (run_server_task(-1, Var::new_obj(SYSTEM_OBJECT), "handle_signal", args, "", &result) != OUTCOME_DONE || is_true(result)) {
         /* :handle_signal returned true; do nothing. */
@@ -557,13 +557,13 @@ send_message(Objid listener, network_handle nh, const char *msg_name, ...)
     va_start(args, msg_name);
     if (get_server_option(listener, msg_name, &msg)) {
         if (msg.type == TYPE_STR)
-            network_send_line(nh, msg.v.str, 1, 1);
+            network_send_line(nh, msg.str(), 1, 1);
         else if (msg.type == TYPE_LIST) {
             int i;
 
             for (i = 1; i <= msg.length(); i++)
                 if (msg[i].type == TYPE_STR)
-                    network_send_line(nh, msg[i].v.str, 1, 1);
+                    network_send_line(nh, msg[i].str(), 1, 1);
         }
     } else          /* Use default message */
         while ((line = va_arg(args, const char *)) != 0)
@@ -1088,7 +1088,7 @@ emergency_mode()
             if (*++line == ';')
                 line++;
             else {
-                str.v.str = str_dup("return");
+                str.str(str_dup("return"));
                 code = listappend(code, str);
             }
 
@@ -1103,15 +1103,15 @@ emergency_mode()
                     if (!strcmp(line, "."))
                         break;
                     else {
-                        str.v.str = str_dup(line);
+                        str.str(str_dup(line));
                         code = listappend(code, str);
                     }
                 }
             } else {
-                str.v.str = str_dup(line);
+                str.str(str_dup(line));
                 code = listappend(code, str);
             }
-            str.v.str = str_dup(";");
+            str.str(str_dup(";"));
             code = listappend(code, str);
 
             program = parse_list_as_program(code, &errors);
@@ -1143,7 +1143,7 @@ emergency_mode()
                 printf("** %" PRIdN " errors during parsing:\n",
                        errors.length());
                 for (i = 1; i <= errors.length(); i++)
-                    printf("  %s\n", errors[i].v.str);
+                    printf("  %s\n", errors[i].str());
             }
             free_var(errors);
         } else {
@@ -1151,12 +1151,12 @@ emergency_mode()
             nargs = words.length() - 1;
             if (nargs < 0)
                 continue;
-            command = words[1].v.str;
+            command = words[1].str();
 
             if ((!strcasecmp(command, "program")
                     || !strcasecmp(command, ".program"))
                     && nargs == 1) {
-                const char *verbref = words[2].v.str;
+                const char *verbref = words[2].str();
                 db_verb_handle h;
                 const char *message, *vname;
 
@@ -1172,7 +1172,7 @@ emergency_mode()
                     str.type = TYPE_STR;
 
                     while (strcmp(line = read_stdin_line(" "), ".")) {
-                        str.v.str = str_dup(line);
+                        str.str(str_dup(line));
                         code = listappend(code, str);
                     }
 
@@ -1186,7 +1186,7 @@ emergency_mode()
                         printf("** %" PRIdN " errors during parsing:\n",
                                errors.length());
                         for (i = 1; i <= errors.length(); i++)
-                            printf("  %s\n", errors[i].v.str);
+                            printf("  %s\n", errors[i].str());
                         printf("Verb not programmed.\n");
                     }
 
@@ -1194,7 +1194,7 @@ emergency_mode()
                     free_var(errors);
                 }
             } else if (!strcasecmp(command, "list") && nargs == 1) {
-                const char *verbref = words[2].v.str;
+                const char *verbref = words[2].str();
                 db_verb_handle h;
                 const char *message, *vname;
 
@@ -1206,7 +1206,7 @@ emergency_mode()
                 else
                     printf("%s\n", message);
             } else if (!strcasecmp(command, "disassemble") && nargs == 1) {
-                const char *verbref = words[2].v.str;
+                const char *verbref = words[2].str();
                 db_verb_handle h;
                 const char *message, *vname;
 
@@ -1226,7 +1226,7 @@ emergency_mode()
             } else if (!strcasecmp(command, "debug") && nargs == 0) {
                 debug = !debug;
             } else if (!strcasecmp(command, "wizard") && nargs == 1
-                       && sscanf(words[2].v.str, "#%" PRIdN, &wizard) == 1) {
+                       && sscanf(words[2].str(), "#%" PRIdN, &wizard) == 1) {
                 printf("** Switching to wizard #%" PRIdN "...\n", wizard);
             } else if (!strcasecmp(command, "help") || !strcasecmp(command, "?")) {
                 printf(";EXPR                 "
@@ -1450,7 +1450,7 @@ server_string_option(const char *name, const char *defallt)
     Var v;
 
     if (get_server_option(SYSTEM_OBJECT, name, &v))
-        return (v.type == TYPE_STR ? v.v.str : nullptr);
+        return (v.type == TYPE_STR ? v.str() : nullptr);
     else
         return defallt;
 }
@@ -1595,7 +1595,7 @@ is_trusted_proxy(Objid connection)
         const char *ip = network_ip_address(existing_h->nhandle);
 
         for (i = 1; i <= proxies.length(); i++) {
-            if (proxies[i].type == TYPE_STR && strcmp(ip, proxies[i].v.str) == 0) {
+            if (proxies[i].type == TYPE_STR && strcmp(ip, proxies[i].str()) == 0) {
                 return true;
             }
         }
@@ -2362,6 +2362,7 @@ main(int argc, char **argv)
 #endif
     db_shutdown();
     db_clear_ancestor_cache();
+    db_clear_verb_cache();
     sqlite_shutdown();
     curl_shutdown();
     pcre_shutdown();
@@ -2383,7 +2384,7 @@ bf_server_version(Var arglist, Byte next, void *vdata, Objid progr)
     }
     else {
         r.type = TYPE_STR;
-        r.v.str = str_dup(server_version);
+        r.str(str_dup(server_version));
     }
     free_var(arglist);
     if (r.type == TYPE_ERR)
@@ -2591,7 +2592,7 @@ bf_panic(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     if (arglist.length()) {
-        msg = str_dup(arglist[1].v.str);
+        msg = str_dup(arglist[1].str());
     } else {
         msg = "";
     }
@@ -2607,7 +2608,7 @@ static package
 bf_shutdown(Var arglist, Byte next, void *vdata, Objid progr)
 {
     int nargs = arglist.length();
-    const char *message = (nargs >= 1 ? arglist[1].v.str : nullptr);
+    const char *message = (nargs >= 1 ? arglist[1].str() : nullptr);
 
     if (!is_wizard(progr)) {
         free_var(arglist);
@@ -2832,18 +2833,15 @@ bf_connection_name(Var arglist, Byte next, void *vdata, Objid progr)
     shandle *h = find_shandle(who);
     Var r;
 
-    r.type = TYPE_STR;
-    r.v.str = nullptr;
-
     if (h && !h->disconnect_me) {
         lock_connection_name_mutex(h->nhandle);
         if (arglist.length() == 1) {
-            r.v.str = str_dup(network_connection_name(h->nhandle));
+            r.str(str_dup(network_connection_name(h->nhandle)));
         } else if (arglist[2].v.num == 1)
-            r.v.str = str_dup(network_ip_address(h->nhandle));
+            r.str(str_dup(network_ip_address(h->nhandle)));
         else {
             char *full_conn_name = full_network_connection_name(h->nhandle, true);
-            r.v.str = str_dup(full_conn_name);
+            r.str(str_dup(full_conn_name));
             free(full_conn_name);
         }
         unlock_connection_name_mutex(h->nhandle);
@@ -2852,7 +2850,7 @@ bf_connection_name(Var arglist, Byte next, void *vdata, Objid progr)
     free_var(arglist);
     if (!is_wizard(progr) && progr != who)
         return make_error_pack(E_PERM);
-    else if (!r.v.str)
+    else if (!r.str())
         return make_error_pack(E_INVARG);
     else {
         return make_var_pack(r);
@@ -2890,7 +2888,7 @@ name_lookup_callback(Var arglist, Var *ret, void *extra_data)
          * a bit of a mess anyway. So don't bother continuing. */
         if (!shutdown_triggered.load()) {
             ret->type = TYPE_STR;
-            ret->v.str = name;
+            ret->str(name);
 
             if (rewrite_connect_name && status == 0)
                 if (network_name_lookup_rewrite(who, name, nh) != 0)
@@ -2924,7 +2922,7 @@ static package
 bf_notify(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (player, string [, no_flush]) */
     Objid conn = arglist[1].v.obj;
-    const char *line = arglist[2].v.str;
+    const char *line = arglist[2].str();
     int no_flush = (arglist.length() > 2
                     ? is_true(arglist[3])
                     : 0);
@@ -2978,7 +2976,7 @@ static package
 bf_set_connection_option(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (conn, option, value) */
     Objid oid = arglist[1].v.obj;
-    const char *option = arglist[2].v.str;
+    const char *option = arglist[2].str();
     Var value = arglist[3];
     shandle *h = find_shandle(oid);
     enum error e = E_NONE;
@@ -3003,7 +3001,7 @@ bf_connection_options(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (conn [, opt-name]) */
     Objid oid = arglist[1].v.obj;
     int nargs = arglist.length();
-    const char *oname = (nargs >= 2 ? arglist[2].v.str : nullptr);
+    const char *oname = (nargs >= 2 ? arglist[2].str() : nullptr);
     shandle *h = find_shandle(oid);
     Var ans;
 
@@ -3134,7 +3132,7 @@ bf_listen(Var arglist, Byte next, void *vdata, Objid progr)
                 e = E_INVARG;
                 sprintf(error_msg, "Certificate path should be a string");
             } else {
-                certificate_path = str_dup(value.v.str);
+                certificate_path = str_dup(value.str());
             }
         }
 
@@ -3143,7 +3141,7 @@ bf_listen(Var arglist, Byte next, void *vdata, Objid progr)
                 e = E_INVARG;
                 sprintf(error_msg, "Private key path should be a string");
             } else {
-                key_path = str_dup(value.v.str);
+                key_path = str_dup(value.str());
             }
         }
 #endif
@@ -3155,7 +3153,7 @@ bf_listen(Var arglist, Byte next, void *vdata, Objid progr)
             print_messages = 1;
 
         if (maplookup(options, interface_key, &value, 0) != nullptr && value.type == TYPE_STR)
-            interface = value.v.str;
+            interface = value.str();
     }
 
     if (e == E_NONE) {

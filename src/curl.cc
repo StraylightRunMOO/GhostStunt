@@ -54,8 +54,8 @@ static void curl_thread_callback(Var arglist, Var *ret, void *extra_data)
         timeout = arglist[3].v.num;
 
     curl_handle = curl_easy_init();
-    curl_easy_setopt(curl_handle, CURLOPT_URL, arglist[1].v.str);
-    //curl_easy_setopt(curl_handle, CURLOPT_PROTOCOLS_STR, "http,https,dict");
+    curl_easy_setopt(curl_handle, CURLOPT_URL, arglist[1].str());
+    curl_easy_setopt(curl_handle, CURLOPT_PROTOCOLS_STR, "http,https,dict");
     curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, CurlWriteMemoryCallback);
     curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
     curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
@@ -70,7 +70,7 @@ static void curl_thread_callback(Var arglist, Var *ret, void *extra_data)
         make_error_map(E_INVARG, curl_easy_strerror(res), ret);
     else {
         *ret = str_dup_to_var(raw_bytes_to_binary(chunk.result, chunk.size));
-        oklog("CURL: %lu bytes retrieved from: %s\n", (unsigned long)chunk.size, arglist[1].v.str);
+        oklog("CURL: %lu bytes retrieved from: %s\n", (unsigned long)chunk.size, arglist[1].str());
     }
 
     curl_easy_cleanup(curl_handle);
@@ -95,7 +95,7 @@ bf_url_encode(Var arglist, Byte next, void *vdata, Objid progr)
         return make_raise_pack(E_PERM, "Outbound network connections are disabled.", zero);
 
     Var r;
-    const char *url = arglist[1].v.str;
+    const char *url = arglist[1].str();
 
     char *encoded = curl_easy_escape(curl_handle, url, memo_strlen(url));
 
@@ -105,7 +105,7 @@ bf_url_encode(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     r.type = TYPE_STR;
-    r.v.str = str_dup(encoded);
+    r.str(str_dup(encoded));
 
     free_var(arglist);
     curl_free(encoded);
@@ -120,7 +120,7 @@ bf_url_decode(Var arglist, Byte next, void *vdata, Objid progr)
         return make_raise_pack(E_PERM, "Outbound network connections are disabled.", zero);
 
     Var r;
-    const char *url = arglist[1].v.str;
+    const char *url = arglist[1].str();
 
     char *decoded = curl_easy_unescape(curl_handle, url, memo_strlen(url), nullptr);
 
@@ -130,7 +130,7 @@ bf_url_decode(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     r.type = TYPE_STR;
-    r.v.str = str_dup(decoded);
+    r.str(str_dup(decoded));
 
     free_var(arglist);
     curl_free(decoded);

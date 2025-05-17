@@ -164,7 +164,6 @@ struct WaifPropdefs;
     Var str_dup_to_var(const char *s);
     Var str_ref_to_var(const char *s);
 
-
 typedef struct Waif {
     Objid               _class;
     Objid               owner;
@@ -186,8 +185,7 @@ Var get_call(Var who, Var verb);
 struct Var {
   union {
     Num num;              /* NUM, CATCH, FINALLY */
-    const char *str;      /* CSTR    */
-    char *str_;           /* STR     */
+    const char *str_;     /* STR     */
     UNum unum;            /* UNUM    */
     Objid obj;            /* OBJ     */
     enum error err;       /* ERR     */
@@ -276,17 +274,44 @@ struct Var {
     return TYPE_ERR == type;
   }
 
+  inline hashmap* map(hashmap* m) {
+    type = TYPE_MAP;
+    v.map = m;
+    return v.map;
+  }
+
+  inline Var* list(Var* l) {
+    type = TYPE_LIST;
+    v.list = l;
+    return v.list;
+  }
+
   inline const char* str() const {
-    return is_str() ? v.str : nullptr;
+    return is_str() ? v.str_ : nullptr;
+  }
+
+  inline char* mstr() {
+    return is_str() ? (char*)v.str_ : nullptr;
+  }
+
+  inline char* str() {
+    return mstr();
   }
 
   inline const char* str(const char* s) {
     type = TYPE_STR;
-    return v.str = s;
+    v.str_ = s;
+    return str();
   }
 
   inline Objid obj() const {
     return TYPE_OBJ == type ? v.obj : -1;
+  }
+
+  inline Num num(Num n) {
+    type = TYPE_INT;
+    v.num = n;
+    return n;
   }
 
   inline Num num() const {
@@ -376,14 +401,17 @@ struct Var {
   static inline Var new_str(size_t len) {
     Var v;
     v.type = TYPE_STR;
-    v.str((const char*)mymalloc(len, M_STRING));
+
+    char* s = (char*)mymalloc(len, M_STRING);
+    s[0] = '\0';
+
+    v.str((const char*)s);
     return v;
   }
 
   static inline Var new_str(const char* s, bool copy = false) {
     return copy ? str_dup_to_var(s) : str_ref_to_var(s);
   }
-
 
 /*
   static inline Var str_concat(Var a, Var b)
@@ -442,16 +470,15 @@ struct db_verb_handle {
   verb_handle *ptr;
   Objid oid;
   Var verbname;
-
   verb_handle *handle();
+  Var definer();
 };
 
 inline Var
 str_dup_to_var(const char *s)
 {
     Var r;
-    r.type = TYPE_STR;
-    r.v.str = str_dup(s);
+    r.str(str_dup(s));  
     return r;
 }
 
@@ -459,8 +486,7 @@ inline Var
 str_ref_to_var(const char *s)
 {
     Var r;
-    r.type = TYPE_STR;
-    r.v.str = str_ref(s);
+    r.str(str_ref(s));  
     return r;
 }
 

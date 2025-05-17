@@ -19,12 +19,20 @@ static inline Var& err(enum error e) {
 }
 
 Var get_call(Var obj, Var verb) {
-  Var c = make_call(obj.obj(), verb.v.str);
+  Var c = make_call(obj.obj(), verb.str());
   
   if(db_verb_definer(*c.v.call).obj() != obj.obj())
     c.v.call->oid = obj.obj();
 
   return c;
+}
+
+verb_handle* db_verb_handle::handle() {
+  return this->ptr;
+}
+
+Var db_verb_handle::definer() {
+  return (this->ptr != nullptr) ? this->ptr->definer : Var::new_obj(this->oid);
 }
 
 static inline std::vector<Var> var_to_vec(Var v) {
@@ -195,8 +203,8 @@ Var& Var::operator+=(const Var& rhs)
   else if(this->type == TYPE_LIST)
     *this = (rhs.type == TYPE_LIST) ? listconcat(var_ref(*this), var_dup(rhs)) : listappend(*this, var_dup(rhs));
   else if(this->type == TYPE_STR) {
-    auto len1 = memo_strlen(this->v.str);
-    auto len2 = memo_strlen(rhs.v.str);
+    auto len1 = memo_strlen(this->str());
+    auto len2 = memo_strlen(rhs.str());
 
     /*
     char *str = (char*)mymalloc(len1 + len2 + 1, M_STRING);
@@ -207,8 +215,9 @@ Var& Var::operator+=(const Var& rhs)
     this->v.str_ = str;
     */
 
-    (*this).v.str_ = (char *)myrealloc((void*)(*this).v.str, len1 + len2 + 1, M_STRING);
-    strncat((*this).v.str_, rhs.v.str, len2);
+    char* new_str = (char *)myrealloc((void*)(*this).str(), len1 + len2 + 1, M_STRING);
+    strncat(new_str, rhs.str(), len2);
+    str((const char*)new_str);
   }
 
   return *this;
@@ -236,7 +245,7 @@ std::size_t Var::hash() const {
 
   switch (type) {
   case TYPE_STR:
-    hash = static_cast<std::size_t>(XXH64((char*)v.str, memo_strlen(v.str), MAP_HASH_SEED1) ^ type);
+    hash = static_cast<std::size_t>(XXH64((char*)str(), memo_strlen(str()), MAP_HASH_SEED1) ^ type);
     break;
   case TYPE_INT:
     hash = static_cast<std::size_t>(XXH64((char*)(&v.num), sizeof(v.num), MAP_HASH_SEED1) ^ type);

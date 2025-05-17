@@ -310,7 +310,6 @@ bf_max_object(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(r);
 }
 
-
 struct create_args {
     Var parents;
     Objid owner;
@@ -634,7 +633,7 @@ bf_ancestors(Var arglist, Byte next, void *vdata, Objid progr)
         free_var(arglist);
         return make_error_pack(E_INVARG);
     } else {
-        Var r = db_ancestors(obj, full);
+        Var r = var_dup(db_ancestors(obj, full));
         free_var(arglist);
         return make_var_pack(r);
     }
@@ -996,7 +995,7 @@ void locate_by_name_thread_callback(Var arglist, Var *ret, void *extra_data)
     std::vector<int> tmp;
 
     const int case_matters = arglist.length() < 2 ? 0 : is_true(arglist[2]);
-    const int string_length = memo_strlen(arglist[1].v.str);
+    const int string_length = memo_strlen(arglist[1].str());
 
     const Objid last_objid = db_last_used_objid();
     for (int x = 0; x <= last_objid; x++)
@@ -1006,7 +1005,7 @@ void locate_by_name_thread_callback(Var arglist, Var *ret, void *extra_data)
 
         object.v.obj = x;
         db_find_property(object, "name", &name);
-        if (strindex(name.v.str, memo_strlen(name.v.str), arglist[1].v.str, string_length, case_matters))
+        if (strindex(name.str(), memo_strlen(name.str()), arglist[1].str(), string_length, case_matters))
             tmp.push_back(x);
     }
 
@@ -1205,7 +1204,6 @@ static inline Var object_contents(Var v) {
     return o != nullptr ? var_ref(dbpriv_object_contents(o)) : new_list(0);
 }
 
-/*
 static package
 bf_all_contents(Var arglist, Byte next, void *vdata, Objid progr)
 {
@@ -1232,50 +1230,6 @@ bf_all_contents(Var arglist, Byte next, void *vdata, Objid progr)
     free_var(arglist);
     return make_var_pack(r);
 }
-*/
-
-
-static package
-bf_all_contents(Var arglist, Byte next, void *vdata, Objid progr)
-{
-    Var o = arglist[1];
-
-    if(!is_valid(o)) {
-        free_var(arglist);
-        return make_error_pack(E_INVIND);
-    }
-
-    int nargs = arglist.length();
-    bool one_parent = nargs == 1 ? false : true;
-if (nargs == 2 && !valid(arglist.v.list[2].v.obj))
-        {
-            free_var(arglist);
-            return make_error_pack(E_INVIND);
-        }
-    Var parent = one_parent ? arglist.v.list[2] : nothing;
-    free_var(arglist);
-    Var r = object_contents(o);
-    for(auto i=1; i<=r.length(); i++)
-        r = listconcat(r, object_contents(r[i]));
-
-    if (!one_parent) {
-        return make_var_pack(r);
-    }
-    else {
-        Var result = new_list(r.length());
-        for (int x = 1; x <= r.length(); x++) {
-            Objid oid = r[x].v.obj;
-            if (db_object_isa(var_dup(r[x]), var_dup(parent)))
-                {
-                result = setadd(result, r[x]);
-            }
-        }
-        return make_var_pack(result);
-        }
-}
-
-
-
 
 static inline Var corified_make_map()
 {
@@ -1283,9 +1237,9 @@ static inline Var corified_make_map()
     
     db_for_all_props(Var::new_obj(SYSTEM_OBJECT), [&corified](Var name, Var value) -> int {
         if(value.type == TYPE_OBJ) {
-            Stream *s = new_stream(memo_strlen(name.v.str)+2);
+            Stream *s = new_stream(memo_strlen(name.str())+2);
             stream_add_char(s, '$');
-            stream_add_string(s, name.v.str);
+            stream_add_string(s, name.str());
 
             if(maphaskey(corified, value)) {
                 if(corified[value].type != TYPE_LIST) {
@@ -1304,8 +1258,8 @@ static inline Var corified_make_map()
         } else if(value.type == TYPE_MAP) {
             mapforeach(value, [&name, &corified](Var mapkey, Var mapvalue, int index) -> int {
                 if(mapkey.type == TYPE_STR && mapvalue.type == TYPE_OBJ) {
-                    Stream *s = new_stream(memo_strlen(name.v.str)+memo_strlen(mapkey.v.str)+6);
-                    stream_printf(s, "$%s[\"%s\"]", name.v.str, mapkey.v.str);
+                    Stream *s = new_stream(memo_strlen(name.str())+memo_strlen(mapkey.str())+6);
+                    stream_printf(s, "$%s[\"%s\"]", name.str(), mapkey.str());
 
                     if(maphaskey(corified, mapvalue)) {
                         if(corified[mapvalue].type != TYPE_LIST) {
@@ -1345,6 +1299,8 @@ static inline int check_nonce() {
 }
 
 Var corified_as(Var obj, int mode) {
+    Var r;
+
     static Var corified = corified_make_map();
 
     if(mode < 0) {
@@ -1352,7 +1308,7 @@ Var corified_as(Var obj, int mode) {
         corified = corified_make_map();
     }
 
-    Var r;
+    //Var r;
     if(maphaskey(corified, obj)) {
         r = var_ref((mode == 0 && corified[obj].type == TYPE_LIST) ? corified[obj][1] : corified[obj]);
     } else {

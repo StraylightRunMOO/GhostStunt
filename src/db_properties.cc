@@ -421,7 +421,7 @@ db_for_all_props(Var obj, std::function<int(Var, Var)> func)
     propname.type = TYPE_STR;
 
     for (auto i = 0; i < len; i++) {
-        propname.v.str = o->propdefs.l[i].name;
+        propname.str(o->propdefs.l[i].name);
         propval = o->propval[i].var;
         int ret = func(propname, propval);
         if(ret != 0) return ret;
@@ -444,7 +444,7 @@ get_bi_value(db_prop_handle h, Var * value)
     switch (h.built_in) {
         case BP_NAME:
             value->type = TYPE_STR;
-            value->v.str = str_ref(dbpriv_object_name(o));
+            value->str(str_ref(dbpriv_object_name(o)));
             break;
         case BP_OWNER:
             value->type = TYPE_OBJ;
@@ -678,7 +678,7 @@ db_set_property_value(db_prop_handle h, Var value)
             case BP_NAME:
                 if (value.type != TYPE_STR)
                     goto complain;
-                dbpriv_set_object_name(o, value.v.str);
+                dbpriv_set_object_name(o, value.str());
                 break;
             case BP_OWNER:
                 if (value.type != TYPE_OBJ)

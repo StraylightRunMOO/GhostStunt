@@ -42,7 +42,6 @@
 #include "unparse.h"
 #include "version.h"
 #include "waif.h"
-
 
 /*********** Input ***********/
 
@@ -134,7 +133,12 @@ try_again:
         stream_add_string(s, buffer);
         return (dbio_input_version >= DBV_18) ? str_unescape(reset_stream(s), len) : reset_stream(s);
     } else {
-        return (dbio_input_version >= DBV_18) ? str_unescape(buffer, len) : buffer;
+        if(dbio_input_version >= DBV_18) {
+            const char *r = str_unescape(buffer, len);
+            strcpy(buffer, r);
+            free_str(r);
+        }
+        return buffer;
     }
 }
 
@@ -170,7 +174,7 @@ dbio_read_var(void)
             case TYPE_NONE:
                 break;
             case _TYPE_STR:
-                r.v.str = dbio_read_string_intern();
+                r.str(dbio_read_string_intern());
                 r.type = TYPE_STR;
                 break;
             case _TYPE_TYPE:
@@ -231,7 +235,7 @@ dbio_read_var(void)
                 r.type = TYPE_NONE;
                 break;
             case _TYPE_STR_OLD:
-                r.v.str = dbio_read_string_intern();
+                r.str(dbio_read_string_intern());
                 r.type = TYPE_STR;
                 break;
             case TYPE_OBJ_OLD:
@@ -431,7 +435,7 @@ dbio_write_var(Var v)
         case TYPE_NONE:
             break;
         case TYPE_STR:
-            dbio_write_string(v.v.str);
+            dbio_write_string(v.str());
             break;
         case _TYPE_TYPE:
         case TYPE_ERR:

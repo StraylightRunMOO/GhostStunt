@@ -58,7 +58,7 @@ extern std::string toliteral(Var);
 extern const char* str_escape(const char*, int);
 extern const char* str_unescape(const char*, int);
 
-extern Var explode(Var s, char delim, bool mode);
+extern Var explode(Var, Var, bool);
 extern Var implode(Var src, Var sep);
 
 extern Var uppercase(Var s);

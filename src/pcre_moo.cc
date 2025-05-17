@@ -123,8 +123,8 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
     unsigned char options = 0;
     unsigned char flags = FIND_ALL;
 
-    subject = arglist[1].v.str;
-    pattern = arglist[2].v.str;
+    subject = arglist[1].str();
+    pattern = arglist[2].str();
     options = (arglist.length() >= 3 && is_true(arglist[3])) ? 0 : PCRE_CASELESS;
 
     if (arglist.length() >= 4 && arglist[4].num() == 0)
@@ -232,7 +232,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
                     sprintf(substring, "%.*s", substring_size, subject + ovector[2 * n]);
                     Var substring_var;
                     substring_var.type = TYPE_STR;
-                    substring_var.v.str = substring;
+                    substring_var.str(substring);
                     result = mapinsert(result, var_ref(match), substring_var);
 
                     named_groups = mapinsert(named_groups, str_dup_to_var((const char*)(tabptr + 2)), result);
@@ -330,8 +330,8 @@ static Var result_indices(int ovector[], int n)
 static package
 bf_pcre_replace(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    const char *linebuf = arglist[1].v.str;
-    const char *pattern = arglist[2].v.str;
+    const char *linebuf = arglist[1].str();
+    const char *pattern = arglist[2].str();
 
     int err;
     pcrs_job *job = pcrs_compile_command(pattern, &err);
@@ -361,7 +361,7 @@ bf_pcre_replace(Var arglist, Byte next, void *vdata, Objid progr)
 
         Var ret;
         ret.type = TYPE_STR;
-        ret.v.str = str_dup(result);
+        ret.str(str_dup(result));
 
         free_var(arglist);
         pcrs_free_job(job);

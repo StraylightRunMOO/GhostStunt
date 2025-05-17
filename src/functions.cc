@@ -369,7 +369,7 @@ make_raise_pack(enum error err, const char *msg, Var value)
     package p;
 
     p.kind = package::BI_RAISE;
-    p.u = raise_t{.code = Var::new_err(err), .value = value, .msg = str_dup(msg)};
+    p.u = raise_t{.code = Var::new_err(err), .value = value, .msg = msg};
 
     return p;
 }
@@ -379,7 +379,7 @@ make_x_not_found_pack(enum error err, const char *msg, Objid the_object)
 {
     Var missing;
     missing.type = TYPE_STR;
-    missing.v.str = str_ref(msg);
+    missing.str(str_ref(msg));
     char *error_msg = nullptr;
     asprintf(&error_msg, "%s: #%" PRIdN ":%s()", unparse_error(err), the_object, msg);
 
@@ -501,7 +501,7 @@ bf_function_info(Var arglist, Byte next, void *vdata, Objid progr)
     unsigned int i;
 
     if (arglist.length() == 1) {
-	i = number_func_by_name(arglist[1].v.str);
+	i = number_func_by_name(arglist[1].str());
 	if (i == FUNC_NOT_FOUND) {
 	    free_var(arglist);
 	    return make_error_pack(E_INVARG);

@@ -52,7 +52,7 @@ static Var string_to_moo_type(char* str, bool parse_objects, bool sanitize_strin
     if (str == nullptr)
     {
         s.type = TYPE_STR;
-        s.v.str = str_dup("NULL");
+        s.str(str_dup("NULL"));
         return s;
     }
 
@@ -74,7 +74,7 @@ static Var string_to_moo_type(char* str, bool parse_objects, bool sanitize_strin
         if (sanitize_string)
             sanitize_string_for_moo(str);
         s.type = TYPE_STR;
-        s.v.str = str_dup(str);
+        s.str(str_dup(str));
     }
     return s;
 }
@@ -166,7 +166,7 @@ static int callback(void *index, int argc, char **argv, char **azColName)
             if (handle->options & SQLITE_SANITIZE_STRINGS)
                 sanitize_string_for_moo(argv[i]);
 
-            s.v.str = str_dup(argv[i]);
+            s.str(str_dup(argv[i]));
         } else {
             s = string_to_moo_type(argv[i], handle->options & SQLITE_PARSE_OBJECTS, handle->options & SQLITE_SANITIZE_STRINGS);
         }
@@ -224,7 +224,7 @@ bf_sqlite_open(Var arglist, Byte next, void *vdata, Objid progr)
         return make_raise_pack(E_QUOTA, "Too many database connections open.", var_ref(zero));
     }
 
-    const char *unresolved_path = arglist[1].v.str;
+    const char *unresolved_path = arglist[1].str();
     const char *path = nullptr;
     int dup_check = -1;
 
@@ -369,7 +369,7 @@ static void sqlite_execute_thread_callback(Var args, Var *r, void *extra_data)
         return;
     }
 
-    const char *query = args[2].v.str;
+    const char *query = args[2].str();
     sqlite_conn *handle = sqlite_connections[index];
     sqlite3_stmt *stmt;
 
@@ -378,7 +378,7 @@ static void sqlite_execute_thread_callback(Var args, Var *r, void *extra_data)
     {
         const char *err = sqlite3_errmsg(handle->id);
         r->type = TYPE_STR;
-        r->v.str = str_dup(err);
+        r->str(str_dup(err));
         return;
     }
 
@@ -391,7 +391,7 @@ static void sqlite_execute_thread_callback(Var args, Var *r, void *extra_data)
         switch (args[3][x].type)
         {
             case TYPE_STR:
-                sqlite3_bind_text(stmt, x, args[3][x].v.str, -1, nullptr);
+                sqlite3_bind_text(stmt, x, args[3][x].str(), -1, nullptr);
                 break;
             case TYPE_INT:
                 sqlite3_bind_int(stmt, x, args[3][x].v.num);
@@ -415,7 +415,7 @@ static void sqlite_execute_thread_callback(Var args, Var *r, void *extra_data)
 	if (!ok) {
 		const char *err = sqlite3_errmsg(handle->id);
 		r->type = TYPE_STR;
-		r->v.str = str_dup(err);
+		r->str(str_dup(err));
 	}
 	else {
 		int col = sqlite3_column_count(stmt);
@@ -437,7 +437,7 @@ static void sqlite_execute_thread_callback(Var args, Var *r, void *extra_data)
 				if (!(handle->options & SQLITE_PARSE_TYPES))
 				{
 					s.type = TYPE_STR;
-					s.v.str = str_dup(str);
+					s.str(str_dup(str));
 				}
 				else {
 					s = string_to_moo_type(str, handle->options & SQLITE_PARSE_OBJECTS, handle->options & SQLITE_SANITIZE_STRINGS);
@@ -486,7 +486,7 @@ static void sqlite_query_thread_callback(Var args, Var *r, void *extra_data)
         return;
     }
 
-    const char *query = args[2].v.str;
+    const char *query = args[2].str();
     char *err_msg = nullptr;
 
     sqlite_result *thread_handle = (sqlite_result*)mymalloc(sizeof(sqlite_result), M_STRUCT);
@@ -503,7 +503,7 @@ static void sqlite_query_thread_callback(Var args, Var *r, void *extra_data)
     if (rc != SQLITE_OK)
     {
         r->type = TYPE_STR;
-        r->v.str = str_dup(err_msg);
+        r->str(str_dup(err_msg));
         sqlite3_free(err_msg);
     } else {
         *r = var_dup(thread_handle->last_result);
@@ -593,7 +593,7 @@ bf_sqlite_limit(Var arglist, Byte next, void *vdata, Objid progr)
     int new_value = arglist[3].v.num;
 
     if (arglist[2].type == TYPE_STR) {
-        const char *player_category = arglist[2].v.str;
+        const char *player_category = arglist[2].str();
         for (auto category_name : categories)
             if (!strcmp(player_category, category_name.str)) {
                 category = category_name.value;

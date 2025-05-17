@@ -192,7 +192,7 @@ handle_null(void *ctx)
     struct parse_context *pctx = (struct parse_context *)ctx;
     Var v;
     v.type = TYPE_STR;
-    v.v.str = str_dup("null");
+    v.str(str_dup("null"));
     PUSH(pctx->top, v);
     return 1;
 }
@@ -347,7 +347,7 @@ handle_string(void *ctx, const unsigned char *stringVal, unsigned int stringLen)
                 strncpy(temp, val, len);
                 temp[len] = '\0';
                 v.type = TYPE_STR;
-                v.v.str = str_dup(temp);
+                v.str(str_dup(temp));
                 break;
             }
             default:
@@ -358,7 +358,7 @@ handle_string(void *ctx, const unsigned char *stringVal, unsigned int stringLen)
         strncpy(temp, val, len);
         temp[len] = '\0';
         v.type = TYPE_STR;
-        v.v.str = str_dup(temp);
+        v.str(str_dup(temp));
         v = str_dup_to_var(val);
     }
 
@@ -449,7 +449,7 @@ generate_key(yajl_gen g, Var v, void *ctx)
         }
         case TYPE_STR:
         {
-            const char *tmp = v.v.str;
+            const char *tmp = v.str();
             size_t len = strlen(tmp);
             if (MODE_EMBEDDED_TYPES == gctx->mode)
                 if (TYPE_NONE != valid_type(&tmp, &len))
@@ -495,7 +495,7 @@ generate(yajl_gen g, Var v, void *ctx)
         }
         case TYPE_STR:
         {
-            const char *tmp = v.v.str;
+            const char *tmp = v.str();
             size_t len = strlen(tmp);
             if (MODE_EMBEDDED_TYPES == gctx->mode)
                 if (TYPE_NONE != valid_type(&tmp, &len))
@@ -580,7 +580,7 @@ bf_parse_json(Var arglist, Byte next, void *vdata, Objid progr)
     pctx.mode = MODE_INFERRED_TYPES;
     pctx.depth = 0;
 
-    const char *str = arglist[1].v.str;
+    const char *str = arglist[1].str();
     size_t len = strlen(str);
 
     package pack;
@@ -588,11 +588,11 @@ bf_parse_json(Var arglist, Byte next, void *vdata, Objid progr)
     int done = 0;
 
     if (arglist.length() >= 2) {
-        if (!strcasecmp(arglist[2].v.str, "inferred-types")) {
+        if (!strcasecmp(arglist[2].str(), "inferred-types")) {
             pctx.mode = MODE_INFERRED_TYPES;
-        } else if (!strcasecmp(arglist[2].v.str, "common-subset")) {
+        } else if (!strcasecmp(arglist[2].str(), "common-subset")) {
             pctx.mode = MODE_COMMON_SUBSET;
-        } else if (!strcasecmp(arglist[2].v.str, "embedded-types")) {
+        } else if (!strcasecmp(arglist[2].str(), "embedded-types")) {
             pctx.mode = MODE_EMBEDDED_TYPES;
         } else {
             free_var(arglist);
@@ -650,9 +650,9 @@ bf_generate_json(Var arglist, Byte next, void *vdata, Objid progr)
     package pack;
 
     if (arglist.length() >= 2) {
-        if (!strcasecmp(arglist[2].v.str, "common-subset") || !strcasecmp(arglist[2].v.str, "inferred-types")) {
+        if (!strcasecmp(arglist[2].str(), "common-subset") || !strcasecmp(arglist[2].str(), "inferred-types")) {
             gctx.mode = MODE_COMMON_SUBSET;
-        } else if (!strcasecmp(arglist[2].v.str, "embedded-types")) {
+        } else if (!strcasecmp(arglist[2].str(), "embedded-types")) {
             gctx.mode = MODE_EMBEDDED_TYPES;
         } else {
             free_var(arglist);
@@ -666,7 +666,7 @@ bf_generate_json(Var arglist, Byte next, void *vdata, Objid progr)
         yajl_gen_get_buf(g, (const unsigned char **)&buf, &len);
 
         json.type = TYPE_STR;
-        json.v.str = str_dup(buf);
+        json.str(str_dup(buf));
 
         pack = make_var_pack(json);
     } else {

@@ -94,7 +94,7 @@ void make_error_map(enum error error_type, const char *msg, Var *ret)
     err.type = TYPE_ERR;
     err.v.err = error_type;
 
-    *ret = new_map(0);
+    *ret = new_map(2);
     *ret = mapinsert(*ret, var_ref(error_key), err);
     *ret = mapinsert(*ret, var_ref(message_key), str_dup_to_var(msg));
 }
@@ -283,8 +283,8 @@ bf_threads(Var arglist, Byte next, void *vdata, Objid progr)
 static package bf_thread_pool(Var arglist, Byte next, void *vdata, Objid progr)
 {
     const int nargs = arglist.length();
-    const char* func = arglist[1].v.str;
-    const char* pool = arglist[2].v.str;
+    const char* func = arglist[1].str();
+    const char* pool = arglist[2].str();
     const int value = (nargs > 2 ? arglist[3].v.num : 0);
     free_var(arglist);
 
@@ -322,9 +322,9 @@ static void background_test_callback(Var args, Var *ret, void *extra_data)
 
     ret->type = TYPE_STR;
     if (args.length() == 0)
-        ret->v.str = str_dup("Hello, world.");
+        ret->str(str_dup("Hello, world."));
     else
-        ret->v.str = str_dup(args[1].v.str);
+        ret->str(str_dup(args[1].str()));
 }
 
 /* The background testing function. Accepts a string argument and a time argument. Its goal is simply

@@ -384,7 +384,7 @@ bf_exec(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     /* check the path */
-    cmd = arglist[1][1].v.str;
+    cmd = arglist[1][1].str();
     if (0 == strlen(cmd)) {
         pack = make_raise_pack(E_INVARG, "Invalid path", var_ref(zero));
         goto free_arglist;
@@ -423,7 +423,7 @@ bf_exec(Var arglist, Byte next, void *vdata, Objid progr)
     in = nullptr;
     len = 0;
     if (listlength(arglist) > 1) {
-        if ((in = binary_to_raw_bytes(arglist[2].v.str, &len)) == nullptr) {
+        if ((in = binary_to_raw_bytes(arglist[2].str(), &len)) == nullptr) {
             pack = make_error_pack(E_INVARG);
             goto free_cmd;
         }
@@ -458,7 +458,7 @@ bf_exec(Var arglist, Byte next, void *vdata, Objid progr)
 
     args = (const char **)mymalloc(sizeof(const char *) * i, M_ARRAY);
     FOR_EACH(v, arglist[1], i, c)
-    args[i - 1] = str_dup(v.v.str);
+    args[i - 1] = str_dup(v.str());
     args[i - 1] = nullptr;
 
 
@@ -468,7 +468,7 @@ bf_exec(Var arglist, Byte next, void *vdata, Objid progr)
     env[0] = str_dup("PATH=/bin:/usr/bin");
     if (listlength(arglist) >= 3) {
         FOR_EACH(v, arglist[3], i, c)
-        env[i] = str_dup(v.v.str);
+        env[i] = str_dup(v.str());
         env[i] = nullptr;
     } else {
         env[1] = nullptr;

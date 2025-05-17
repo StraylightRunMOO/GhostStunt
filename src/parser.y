@@ -373,7 +373,7 @@ expr:
 	| tSTRING
 		{
 		    $$ = alloc_var(TYPE_STR);
-		    $$->e.var.v.str = $1;
+		    $$->e.var.str($1);
 		}
 	| tOBJECT
 		{
@@ -396,14 +396,14 @@ expr:
 		    Expr *obj = alloc_var(TYPE_OBJ);
 		    Expr *prop = alloc_var(TYPE_STR);
 		    obj->e.var.v.obj = 0;
-		    prop->e.var.v.str = $2;
+		    prop->e.var.str($2);
 		    $$ = alloc_binary(EXPR_PROP, obj, prop);
 		}
 	| expr '.' tID
 		{
 		    /* Treat foo.bar like foo.("bar") for simplicity */
 		    Expr *prop = alloc_var(TYPE_STR);
-		    prop->e.var.v.str = $3;
+		    prop->e.var.str($3);
 		    $$ = alloc_binary(EXPR_PROP, $1, prop);
 		}
 	| expr ':' ':' tID
@@ -412,7 +412,7 @@ expr:
 
 			if ((e->kind == EXPR_VAR && e->e.var.type == TYPE_OBJ) || e->kind == EXPR_ID || e->kind == EXPR_PROP || e->kind == EXPR_VERB) {
 				Expr *verb = alloc_var(TYPE_STR);
-				verb->e.var.v.str = $4;
+				verb->e.var.str($4);
 				$$ = alloc_call_handle($1, verb);
 			} else {
 				yyerror("Invalid call handle expression: not an object.");
@@ -430,7 +430,7 @@ expr:
 			char *newstr;
       asprintf(&newstr, "%c%s", WAIF_PROP_PREFIX, $4);
 			dealloc_string($4);
-		  prop->e.var.v.str = alloc_string(newstr);
+		  prop->e.var.str(alloc_string(newstr));
 			free(newstr);
 		  $$ = alloc_binary(EXPR_PROP, $1, prop);
 		}
@@ -442,7 +442,7 @@ expr:
 		{
 		    /* treat foo:bar(args) like foo:("bar")(args) */
 		    Expr *verb = alloc_var(TYPE_STR);
-		    verb->e.var.v.str = $3;
+		    verb->e.var.str($3);
 		    $$ = alloc_verb($1, verb, $5);
 		}
 	| '$' tID '(' arglist ')'
@@ -451,7 +451,7 @@ expr:
 		    Expr *obj = alloc_var(TYPE_OBJ);
 		    Expr *verb = alloc_var(TYPE_STR);
 		    obj->e.var.v.obj = 0;
-		    verb->e.var.v.str = $2;
+		    verb->e.var.str($2);
 		    $$ = alloc_verb(obj, verb, $4);
 		}
 	| expr ':' '(' expr ')' '(' arglist ')'
@@ -554,7 +554,7 @@ expr:
 		    	$$->e._catch._try = alloc_binary(EXPR_INDEX, c, idx);
 		    	$$->e._catch.codes = 0;
 		    	$$->e._catch.except = e;
-
+		    /*
 		    } else if(strcmp($1, "reverse") == 0) {
 		    	warning($1, "() has been deprecated. Use the range operator [$..^] instead.");
 
@@ -562,6 +562,7 @@ expr:
 		    	$$->e.range.base = $3->expr;
 		    	$$->e.range.from = alloc_expr(EXPR_LAST);
 		    	$$->e.range.to = alloc_expr(EXPR_FIRST);
+		    */
 		    } else if ((f_no = number_func_by_name($1)) == FUNC_NOT_FOUND) {
 					warning("Unknown built-in function: ", $1);
 
@@ -569,7 +570,7 @@ expr:
 					Expr           *fname = alloc_var(TYPE_STR);
 					Arg_List       *a = alloc_arg_list(ARG_NORMAL, fname);
 
-					fname->e.var.v.str = $1;
+					fname->e.var.str($1);
 					$$->e.call.func = number_func_by_name("call_function");
 					$$->e.call.args = a;
 		    } else {
@@ -1389,7 +1390,7 @@ my_error(void *data, const char *msg)
     Var                 v;
 
     v.type = TYPE_STR;
-    v.v.str = str_dup(msg);
+    v.str(str_dup(msg));
     state->errors = listappend(state->errors, v);
 }
 
@@ -1403,7 +1404,7 @@ my_getc(void *data)
     code = state->code;
     if (task_timed_out  ||  state->cur_string > code.length())
 	return EOF;
-    else if (!(c = code[state->cur_string].v.str[state->cur_char])) {
+    else if (!(c = code[state->cur_string].str()[state->cur_char])) {
 	state->cur_string++;
 	state->cur_char = 0;
 	return '\n';

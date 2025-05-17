@@ -1008,7 +1008,7 @@ open_connection(Var arglist, int *read_fd, int *write_fd,
              arglist[2].type != TYPE_INT)
         return make_error_pack(E_TYPE);
 
-    const char *host_name = arglist[1].v.str;
+    const char *host_name = arglist[1].str();
     int host_port = arglist[2].v.num;
 
     memset(&hint, 0, sizeof hint);
@@ -1690,7 +1690,7 @@ network_keep_alive_map(network_handle nh)
 {
     nhandle *h = (nhandle*)nh.ptr;
 
-    Var ret = new_map(0);
+    Var ret = new_map(4);
     ret = mapinsert(ret, str_dup_to_var("enabled"), Var::new_int(h->keep_alive));
     ret = mapinsert(ret, str_dup_to_var("idle"), Var::new_int(h->keep_alive_idle));
     ret = mapinsert(ret, str_dup_to_var("interval"), Var::new_int(h->keep_alive_interval));

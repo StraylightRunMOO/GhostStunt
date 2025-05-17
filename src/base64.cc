@@ -63,7 +63,7 @@ bf_encode_base64(Var arglist, Byte next, void *vdata, Objid progr)
     int len;
     const char *in;
 
-    in = binary_to_raw_bytes(arglist[1].v.str, &len);
+    in = binary_to_raw_bytes(arglist[1].str(), &len);
 
     if (!in) {
         const package pack = make_raise_pack(E_INVARG, "Invalid binary string", var_ref(arglist[1]));
@@ -110,7 +110,7 @@ bf_encode_base64(Var arglist, Byte next, void *vdata, Objid progr)
     Var ret;
 
     ret.type = TYPE_STR;
-    ret.v.str = str_dup(buffer.str().c_str());
+    ret.str(str_dup(buffer.str().c_str()));
 
     free_var(arglist);
 
@@ -166,7 +166,7 @@ bf_decode_base64(Var arglist, Byte next, void *vdata, Objid progr)
     unsigned int len;
     const char *in;
 
-    in = arglist[1].v.str;
+    in = arglist[1].str();
     len = memo_strlen(in);
 
     int i, pad = 0;
@@ -240,7 +240,7 @@ bf_decode_base64(Var arglist, Byte next, void *vdata, Objid progr)
     Var ret;
 
     ret.type = TYPE_STR;
-    ret.v.str = str_dup(raw_bytes_to_binary(out, size));
+    ret.str(str_dup(raw_bytes_to_binary(out, size)));
 
     free_var(arglist);
 
