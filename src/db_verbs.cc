@@ -349,6 +349,8 @@ db_find_command_verb(Objid oid, const char *verb,
 void
 db_priv_affected_callable_verb_lookup(void)
 {
+    if(!verb_cache.v.map) return;
+
     free_var(verb_cache);
     verb_cache.v.map = nullptr;
 }
@@ -883,7 +885,9 @@ void
 db_clear_verb_cache(void)
 {
 #ifdef USE_VERB_CACHE /*Just in case */
+    if(!verb_cache.v.map) return;
     free_var(verb_cache);
     verb_cache.v.map = nullptr;
 #endif
 }
+

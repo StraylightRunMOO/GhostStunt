@@ -217,6 +217,7 @@ myrealloc(void *ptr, unsigned size, Memory_Type type)
 void
 myfree(void *ptr, Memory_Type type)
 {
+    return;
     #ifdef USE_RPMALLOC
       if(rpmalloc_usable_size((char *)ptr - refcount_overhead(type)) > 0)
         rpfree((char *)ptr - refcount_overhead(type));

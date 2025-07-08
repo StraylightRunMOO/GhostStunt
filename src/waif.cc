@@ -825,6 +825,8 @@ waif_put_prop(Waif *w, const char *name, Var val, Objid progr)
 int
 waif_bytes(Waif *w)
 {
+    return sizeof(Waif);
+
     int len;
     int cnt;
 
@@ -836,6 +838,9 @@ waif_bytes(Waif *w)
      */
     len = sizeof(*w);
     cnt = count_waif_propvals(w);
+
+    return len * cnt;
+
     while (cnt--)
         len += value_bytes(w->propvals[cnt]);
     return len;

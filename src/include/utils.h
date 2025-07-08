@@ -45,8 +45,7 @@ extern void aux_free(Var);
 static inline void
 free_var(Var v)
 {
-    if (v.is_pointer() && (v.type != TYPE_LIST || v.length() > 0))
-	   complex_free_var(v);
+  complex_free_var(v);
 }
 
 static inline Var

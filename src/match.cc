@@ -349,8 +349,8 @@ match_object(Objid player, const char *name)
             char *p;
             Objid r = strtol(name + 1, &p, 10);
             return (*p != '\0' || !valid(r)) ? FAILED_MATCH : r;
-        } else if(name[0] == '$') {
-            Var value = db_property_value_default(SYSTEM_OBJECT, name+1, Var::new_int(0));
+        } else if(name[0] == '$') { 
+           Var value = db_property_value_default(SYSTEM_OBJECT, name+1, Var::new_int(0));
             if(value.type == TYPE_OBJ)
                 return value.obj();
             free_var(value);

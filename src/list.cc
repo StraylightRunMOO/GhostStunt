@@ -1085,7 +1085,7 @@ bf_explode(Var arglist, Byte next, void *vdata, Objid progr)
     Var ret;
 
     if(strstr(arglist[1].str(), delim.str()) != NULL)
-        ret = explode(var_ref(arglist[1]), delim, mode);
+        ret = explode(var_dup(arglist[1]), delim, mode);
     else
         ret = enlist_var(var_ref(arglist[1]));
 

@@ -705,7 +705,18 @@ call_verb2(Objid recv, const char *vname, Var _this, Var args, int do_pass, bool
         if (!is_valid(RUN_ACTIV.vloc))
             return E_INVIND;
 
-        Var ancestors = db_ancestors(RUN_ACTIV.vloc, false);
+        Var ancestors = db_ancestors(_this, false);
+
+        int after = ismember(RUN_ACTIV.vloc, ancestors, 0) + 1;
+
+        if(after > 1) {
+            if(ancestors.length() >= after) {
+                ancestors = sublist(ancestors, after, ancestors.length());
+            } else {
+                free_var(ancestors);
+                return E_VERBNF;
+            }
+        }
 
         listforeach(ancestors, [&h, &vname](Var value, int index) -> int {
             h = db_find_callable_verb(value, vname);
@@ -4254,3 +4265,4 @@ type_mismatch_value(int n_args, ...)
 
     return value_var;
 }
+

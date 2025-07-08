@@ -677,7 +677,7 @@ recycle_waifs(void)
 
     std::vector<Waif*> removals;
     for (auto &x : destroyed_waifs) {
-        if (x.second == false) {
+        if (x.second == false && valid(x.first->_class)) {
             run_server_task(-1, Var::new_waif(x.first), waif_recycle_verb, new_list(0), "", nullptr);
             x.second = true;
             /* Flag it as destroyed. Now we just wait for the refcount to hit zero so we can free it. */
