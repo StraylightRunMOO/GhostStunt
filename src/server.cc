@@ -2381,12 +2381,18 @@ bf_server_version(Var arglist, Byte next, void *vdata, Objid progr)
     Var r;
     if (arglist.length() > 0) {
         r = server_version_full(arglist[1]);
-    }
-    else {
+
+        Var s = new_list(2);
+        s[1] = str_dup_to_var("REV");
+        s[2] = Var::new_int(3);
+        r = listappend(r, s);
+    } else {
         r.type = TYPE_STR;
         r.str(str_dup(server_version));
     }
+
     free_var(arglist);
+    
     if (r.type == TYPE_ERR)
         return make_error_pack(r.v.err);
     else

@@ -225,10 +225,10 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
         return Var::new_obj(FAILED_MATCH);
     }
 
-    Var tokens  = explode(var_ref(subject), var_ref(delim_space), false);
+    Var tokens  = explode(var_dup(subject), var_dup(delim_space), false);
     Var ordinal = Var::new_int(0);
 
-    if(use_ordinal && tokens.length() > 1)
+    if(use_ordinal && tokens.length() >= 1)
         std::tie(ordinal, tokens[1]) = parse_ordinal(tokens[1]);
 
     tokens = prepare_tokens(tokens);
@@ -246,7 +246,7 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
     if(targets.type == TYPE_LIST) {
         listforeach(targets, [&aliases, &tokens, &full_matches, &part_matches](Var target, int i) -> int {
             aliases = prepare_tokens(var_ref(target));
-            if(!aliases.length()) return 1;
+            if(!aliases.length()) return 0;
 
             switch(match_tokens(tokens, aliases)) {
             case MATCH_NONE: break;
@@ -259,7 +259,7 @@ complex_match(Var subject, Var targets, bool use_ordinal = true)
     } else { // TYPE_MAP
         mapforeach(targets, [&aliases, &tokens, &full_matches, &part_matches](Var key, Var target, int i) -> int {
             aliases = prepare_tokens(var_ref(target));
-            if(!aliases.length()) return 1;
+            if(!aliases.length()) return 0;
 
             switch(match_tokens(tokens, aliases)) {
             case MATCH_NONE: break;
