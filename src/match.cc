@@ -322,6 +322,13 @@ match_contents(Objid player, Var subject)
     if(aliases.type != TYPE_LIST || contents.type != TYPE_LIST || aliases.length() != contents.length())
         return FAILED_MATCH;
 
+    if(aliases.type != TYPE_LIST || contents.type != TYPE_LIST || aliases.length() != contents.length()) {
+        free_var(aliases);
+        free_var(contents);
+        return FAILED_MATCH;
+    }
+
+
     Var matches = complex_match(var_ref(subject), var_ref(aliases));
 
     if(matches.type == TYPE_INT) 
@@ -377,7 +384,8 @@ bf_parse_ordinal(Var arglist, Byte next, void *vdata, Objid progr)
     Var r = new_list(2);
     r[1] = ordinal;
     r[2] = implode(tokens, str_dup_to_var(" "));
-
+    
+    free_var(tokens);
     free_var(arglist);
     return make_var_pack(r);
 }
